@@ -37,6 +37,26 @@ def get_streaks(df: pd.DataFrame) -> tuple[int, int]:
     return calculate_streak(df["date_solved"])
 
 
+def daily_counts(df: pd.DataFrame, days: int = 182) -> pd.DataFrame:
+    """
+    Problems solved per calendar day for the last `days` days, zero-filled
+    so charts don't skip inactive days -- feeds the LeetCode-style
+    streak heatmap on the Dashboard.
+    """
+    end = date.today()
+    start = end - timedelta(days=days - 1)
+    all_days = pd.date_range(start, end, freq="D")
+
+    if df.empty:
+        return pd.DataFrame({"date": all_days, "count": 0})
+
+    recent = df[df["date_solved"].dt.date >= start]
+    daily = recent.groupby(recent["date_solved"].dt.floor("D")).size()
+    result = daily.reindex(all_days, fill_value=0).reset_index()
+    result.columns = ["date", "count"]
+    return result
+
+
 def language_distribution(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["language", "count", "percent"])

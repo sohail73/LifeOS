@@ -31,7 +31,7 @@ def generate_study_insights(study_df: pd.DataFrame) -> list[dict]:
     if growth is not None:
         insights.append(
             {
-                "icon": "📈",
+                "icon": "",
                 "title": "Weekly study trend",
                 "body": f"You studied {_pct_text(growth)} this week than last week.",
             }
@@ -41,7 +41,7 @@ def generate_study_insights(study_df: pd.DataFrame) -> list[dict]:
     if best and worst and best != worst:
         insights.append(
             {
-                "icon": "🗓️",
+                "icon": "",
                 "title": "Productivity pattern",
                 "body": (
                     f"Your study activity is highest on {best} and lowest on {worst}. "
@@ -59,7 +59,7 @@ def generate_study_insights(study_df: pd.DataFrame) -> list[dict]:
             if ratio >= 2:
                 insights.append(
                     {
-                        "icon": "⚖️",
+                        "icon": "",
                         "title": "Subject balance",
                         "body": (
                             f"You've spent a lot more time on {top['subject']} than "
@@ -73,7 +73,7 @@ def generate_study_insights(study_df: pd.DataFrame) -> list[dict]:
     if current_streak >= 3:
         insights.append(
             {
-                "icon": "🔥",
+                "icon": "",
                 "title": "Streak update",
                 "body": f"You're on a {current_streak}-day study streak. Keep it going!",
             }
@@ -81,7 +81,7 @@ def generate_study_insights(study_df: pd.DataFrame) -> list[dict]:
     elif longest_streak >= 3 and current_streak == 0:
         insights.append(
             {
-                "icon": "💡",
+                "icon": "",
                 "title": "Streak update",
                 "body": (
                     f"Your longest study streak so far is {longest_streak} days. "
@@ -103,7 +103,7 @@ def generate_coding_insights(coding_df: pd.DataFrame) -> list[dict]:
     if growth is not None:
         insights.append(
             {
-                "icon": "🧩",
+                "icon": "",
                 "title": "Coding activity trend",
                 "body": f"You solved {_pct_text(growth)} problems this week than last week.",
             }
@@ -115,7 +115,7 @@ def generate_coding_insights(coding_df: pd.DataFrame) -> list[dict]:
         if top["count"] >= second["count"] * 1.5:
             insights.append(
                 {
-                    "icon": "💻",
+                    "icon": "",
                     "title": "Language focus",
                     "body": (
                         f"You solved significantly more {top['language']} problems "
@@ -131,7 +131,7 @@ def generate_coding_insights(coding_df: pd.DataFrame) -> list[dict]:
         if strong["topic"] != weak["topic"]:
             insights.append(
                 {
-                    "icon": "🧠",
+                    "icon": "",
                     "title": "Topic strengths",
                     "body": (
                         f"You've solved many {strong['topic']} problems but comparatively "
@@ -148,7 +148,7 @@ def generate_coding_insights(coding_df: pd.DataFrame) -> list[dict]:
         if easy_share >= 0.7 and total >= 5:
             insights.append(
                 {
-                    "icon": "⬆️",
+                    "icon": "",
                     "title": "Difficulty check",
                     "body": (
                         "Most of your solved problems are Easy. Try adding a few "
@@ -163,3 +163,65 @@ def generate_coding_insights(coding_df: pd.DataFrame) -> list[dict]:
 def generate_all_insights(study_df: pd.DataFrame, coding_df: pd.DataFrame) -> list[dict]:
     """Combined list of insight cards for the AI Insights page."""
     return generate_study_insights(study_df) + generate_coding_insights(coding_df)
+
+
+def generate_weekly_summary(user_id: int) -> dict | None:
+    """
+    A natural-language recap of the current week, compared to last
+    week. THIS WEEK's numbers are always recomputed live here (not
+    read from a possibly-stale cached snapshot) -- the once-a-day
+    refresh in auth.session.require_login is for keeping the
+    historical snapshot LOG up to date, not for "right now" numbers,
+    so without this, adding a study session after the day's first
+    page load wouldn't show up here until the next day. LAST week's
+    numbers do come from the frozen historical snapshot, which is
+    correct -- that period is genuinely over and shouldn't change.
+    Returns None only if there's no weekly snapshot history at all
+    (i.e. this is the very first week of activity).
+    """
+    from analytics.snapshot import build_and_save_weekly_snapshot
+    from database.queries import get_snapshots_df
+
+    current = build_and_save_weekly_snapshot(user_id)
+
+    df = get_snapshots_df(user_id, snapshot_type="weekly")
+    if df.empty:
+        return None
+
+    df_sorted = df.sort_values("period_start")
+    previous_rows = df_sorted[df_sorted["period_label"] != current["period_label"]]
+    previous = previous_rows.iloc[-1] if not previous_rows.empty else None
+
+    def _pct_change(old, new):
+        if previous is None or old in (0, None):
+            return None
+        return round((new - old) / old * 100, 0)
+
+    study_change = _pct_change(previous["study_hours"], current["study_hours"]) if previous is not None else None
+    problems_change = (
+        _pct_change(previous["problems_solved"], current["problems_solved"]) if previous is not None else None
+    )
+
+    parts = [
+        f"This week you've studied **{current['study_hours']:.1f} hours**"
+    ]
+    if study_change is not None:
+        direction = "up" if study_change >= 0 else "down"
+        parts.append(f"({direction} {abs(study_change):.0f}% vs. last week)")
+    parts.append(f"and solved **{int(current['problems_solved'])} problems**")
+    if problems_change is not None:
+        direction = "up" if problems_change >= 0 else "down"
+        parts.append(f"({direction} {abs(problems_change):.0f}% vs. last week)")
+    parts.append(f"with a **{int(current['current_streak'])}-day** study streak")
+    parts.append(f"and **{current['goal_completion']:.0f}%** average goal completion.")
+
+    return {
+        "summary_text": " ".join(parts),
+        "study_hours": current["study_hours"],
+        "problems_solved": int(current["problems_solved"]),
+        "current_streak": int(current["current_streak"]),
+        "goal_completion": current["goal_completion"],
+        "study_change_pct": study_change,
+        "problems_change_pct": problems_change,
+        "period_label": current["period_label"],
+    }

@@ -11,17 +11,18 @@ pages/ and is reached through Streamlit's automatic sidebar
 navigation once the user is logged in.
 """
 
-
 import streamlit as st
 
 from auth.auth_utils import authenticate_user, create_user
-from auth.session import current_user_name, is_logged_in, login, logout
+from auth.session import current_user_id, current_user_name, is_logged_in, login, logout
 from database.create_tables import initialize_database
-from database.queries import ensure_default_subjects
+from database.queries import ensure_default_subjects, get_avatar_base64
+from utils.ui import render_sidebar_branding
 
-st.set_page_config(page_title="LifeOS", page_icon="🚀", layout="centered")
+st.set_page_config(page_title="LifeOS", page_icon="⚡", layout="centered")
 
 initialize_database()
+
 
 def render_login_form() -> None:
     with st.form("login_form"):
@@ -89,12 +90,13 @@ def render_logged_out_view() -> None:
 
 
 def render_logged_in_view() -> None:
+    render_sidebar_branding(current_user_name(), get_avatar_base64(current_user_id()))
     st.title("LifeOS")
     st.subheader(f"Welcome back, {current_user_name()}!")
     st.write(
         "Use the sidebar to jump into your **Dashboard**, log a **Study** "
-        "session, track a **Coding** problem, dig into **Analytics**, read "
-        "your **AI Insights**, browse **Snapshots**, or check your **Wrapped**."
+        "session, track a **Coding** problem, plan your **Goals & Tasks**, dig into "
+        "**Analytics**, read your **AI Insights**, browse **Snapshots**, or check your **Wrapped**."
     )
 
     if st.button("Log Out"):
@@ -106,11 +108,3 @@ if is_logged_in():
     render_logged_in_view()
 else:
     render_logged_out_view()
-
-
-st.sidebar.markdown("## LifeOS")
-st.sidebar.markdown("**Track. Analyze. Improve.**")
-
-st.sidebar.caption(
-    "Turn your daily actions into data, insights, and growth."
-)

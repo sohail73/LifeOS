@@ -63,3 +63,21 @@ def calculate_streak(active_dates: pd.Series) -> tuple[int, int]:
 def empty_state(icon: str, title: str, subtitle: str) -> str:
     """Return a small markdown block for a consistent empty-state message."""
     return f"### {icon} {title}\n\n{subtitle}"
+
+
+def get_daily_quote(custom_quote: str | None = None) -> tuple[str, str | None]:
+    """
+    Returns (text, author) to show on the Dashboard. If the user has
+    set their own custom_quote (Settings), that's always used (author
+    is None -- it's their own line). Otherwise picks one real, quoted
+    line from config.constants.DAILY_MOTIVATION deterministically by
+    today's date -- same quote for everyone that day, a different one
+    tomorrow, no randomness/state needed.
+    """
+    if custom_quote and custom_quote.strip():
+        return custom_quote.strip(), None
+
+    from config.constants import DAILY_MOTIVATION
+
+    index = date.today().toordinal() % len(DAILY_MOTIVATION)
+    return DAILY_MOTIVATION[index]

@@ -141,3 +141,47 @@ def month_over_month_growth(df: pd.DataFrame) -> float | None:
 def heatmap_data(df: pd.DataFrame, days: int = 182) -> pd.DataFrame:
     """Daily study minutes for the last `days` days -- feeds the study heatmap."""
     return daily_totals(df, days=days)
+
+
+def combined_streak(study_df: pd.DataFrame, coding_df: pd.DataFrame) -> tuple[int, int]:
+    """
+    Overall app-activity streak: a day counts as "active" if there was
+    study time OR a solved problem that day (not just one or the
+    other). (current_streak, longest_streak) in days.
+    """
+    active_dates: list = []
+    if not study_df.empty:
+        active_dates.extend(study_df["date"].dt.date.tolist())
+    if not coding_df.empty:
+        active_dates.extend(coding_df["date_solved"].dt.date.tolist())
+    if not active_dates:
+        return 0, 0
+    return calculate_streak(pd.Series(active_dates))
+
+
+def combined_daily_activity(study_df: pd.DataFrame, coding_df: pd.DataFrame, days: int = 182) -> pd.DataFrame:
+    """
+    Study hours + problems solved per day for the last `days` days,
+    zero-filled -- feeds the Dashboard's overall app-activity heatmap
+    (as opposed to a coding-only or study-only one).
+    """
+    end = date.today()
+    start = end - timedelta(days=days - 1)
+    all_days = pd.date_range(start, end, freq="D")
+
+    daily_minutes = daily_totals(study_df, days=days).set_index("date")["duration_minutes"]
+
+    if coding_df.empty:
+        daily_problems = pd.Series(0, index=all_days)
+    else:
+        recent = coding_df[coding_df["date_solved"].dt.date >= start]
+        grouped = recent.groupby(recent["date_solved"].dt.floor("D")).size()
+        daily_problems = grouped.reindex(all_days, fill_value=0)
+
+    result = pd.DataFrame({"date": all_days})
+    result["hours"] = (daily_minutes.reindex(all_days, fill_value=0).values / 60).round(2)
+    result["problems"] = daily_problems.values
+    # Weighted activity score used only for heatmap color intensity --
+    # each problem counts like roughly 20 minutes of focused work.
+    result["score"] = result["hours"] * 60 + result["problems"] * 20
+    return result

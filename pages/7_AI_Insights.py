@@ -9,13 +9,16 @@ insight is a Pandas/NumPy computation turned into a sentence.
 import streamlit as st
 
 from analytics.insights import generate_all_insights
-from auth.session import current_user_id, require_login
+from auth.session import current_user_id, current_user_name, require_login
 from database.queries import get_coding_logs_df, get_study_sessions_df
+from database.queries import get_avatar_base64
+from utils.ui import render_sidebar_branding
 
-st.set_page_config(page_title="AI Insights - LifeOS", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="AI Insights - LifeOS", page_icon="⚡", layout="wide")
 require_login()
 
 user_id = current_user_id()
+render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
 st.title("AI Insights")
 st.caption("Data-driven observations about your study and coding patterns.")
 

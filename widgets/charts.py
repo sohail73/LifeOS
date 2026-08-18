@@ -3,57 +3,84 @@ widgets/charts.py
 
 Small, reusable Plotly chart builders. Every function returns a
 plotly.graph_objects Figure -- pages call st.plotly_chart(fig, ...)
-on the result. Keeping chart construction here (instead of inline
-in every page) means one consistent look across Analytics, AI
-Insights, and Wrapped.
+on the result. Keeping chart construction here (instead of inline in
+every page) means one consistent, professional look across
+Dashboard, Analytics, AI Insights, and Wrapped -- matching the light
+purple-accent theme in .streamlit/config.toml and utils/ui.py.
 """
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-PRIMARY_COLOR = "#6C5CE7"
-COLOR_SEQUENCE = px.colors.qualitative.Set2
+PRIMARY_COLOR = "#274245"
+PRIMARY_COLOR_SOFT = "rgba(39, 66, 69, 0.18)"
+INK = "#1B2426"
+MUTED = "#5C6B69"
+GRID_COLOR = "#EFEAD8"
+COLOR_SEQUENCE = ["#274245", "#DFD6AE", "#3D6B66", "#C97B4A", "#7A9E97", "#B99A5B", "#5C6B69"]
+
+_FONT = dict(family="sans-serif", color=INK, size=13)
+
+
+def _apply_base_layout(fig: go.Figure, title: str = "") -> go.Figure:
+    """Shared layout polish applied to every chart: transparent card
+    background, clean gridlines, consistent typography, and a bold
+    left-aligned title matching the rest of the app's visual language."""
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16, color=INK, family="sans-serif"), x=0, xanchor="left"),
+        font=_FONT,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(font=dict(size=12, color=MUTED)),
+        hoverlabel=dict(bgcolor="white", font=dict(color=INK, size=12), bordercolor=GRID_COLOR),
+    )
+    fig.update_xaxes(showgrid=False, zeroline=False, linecolor=GRID_COLOR, tickfont=dict(color=MUTED))
+    fig.update_yaxes(showgrid=True, gridcolor=GRID_COLOR, zeroline=False, tickfont=dict(color=MUTED))
+    return fig
 
 
 def line_chart(df: pd.DataFrame, x: str, y: str, title: str, y_label: str = "") -> go.Figure:
-    fig = px.line(df, x=x, y=y, title=title, markers=True)
-    fig.update_traces(line_color=PRIMARY_COLOR, fill="tozeroy", fillcolor="rgba(108,92,231,0.15)")
-    fig.update_layout(
-        margin=dict(l=10, r=10, t=50, b=10),
-        yaxis_title=y_label,
-        xaxis_title="",
-        hovermode="x unified",
-    )
+    fig = px.line(df, x=x, y=y, markers=True)
+    fig.update_traces(line_color=PRIMARY_COLOR, line_width=2.5, fill="tozeroy", fillcolor=PRIMARY_COLOR_SOFT)
+    fig = _apply_base_layout(fig, title)
+    fig.update_layout(yaxis_title=y_label, xaxis_title="", hovermode="x unified")
     return fig
 
 
 def multi_line_chart(df: pd.DataFrame, x: str, y: str, color: str, title: str) -> go.Figure:
     """Used for the language trend chart -- one line per language."""
-    fig = px.line(df, x=x, y=y, color=color, title=title, markers=True, color_discrete_sequence=COLOR_SEQUENCE)
+    fig = px.line(df, x=x, y=y, color=color, markers=True, color_discrete_sequence=COLOR_SEQUENCE)
+    fig.update_traces(line_width=2.5)
+    fig = _apply_base_layout(fig, title)
     fig.update_layout(
-        margin=dict(l=10, r=10, t=50, b=10),
-        yaxis_title="Problems solved",
-        xaxis_title="",
-        hovermode="x unified",
-        legend_title="Language",
+        yaxis_title="Problems solved", xaxis_title="", hovermode="x unified", legend_title="Language",
     )
     return fig
 
 
 def bar_chart(df: pd.DataFrame, x: str, y: str, title: str, orientation: str = "v") -> go.Figure:
     if orientation == "h":
-        fig = px.bar(df, x=y, y=x, orientation="h", title=title, color_discrete_sequence=[PRIMARY_COLOR])
+        fig = px.bar(df, x=y, y=x, orientation="h", color_discrete_sequence=[PRIMARY_COLOR])
     else:
-        fig = px.bar(df, x=x, y=y, title=title, color_discrete_sequence=[PRIMARY_COLOR])
-    fig.update_layout(margin=dict(l=10, r=10, t=50, b=10), xaxis_title="", yaxis_title="")
+        fig = px.bar(df, x=x, y=y, color_discrete_sequence=[PRIMARY_COLOR])
+    fig.update_traces(marker_line_width=0)
+    fig = _apply_base_layout(fig, title)
+    fig.update_layout(xaxis_title="", yaxis_title="")
     return fig
 
 
 def donut_chart(df: pd.DataFrame, names: str, values: str, title: str) -> go.Figure:
-    fig = px.pie(df, names=names, values=values, title=title, hole=0.55, color_discrete_sequence=COLOR_SEQUENCE)
-    fig.update_traces(textinfo="label+percent")
-    fig.update_layout(margin=dict(l=10, r=10, t=50, b=10))
+    fig = px.pie(df, names=names, values=values, hole=0.6, color_discrete_sequence=COLOR_SEQUENCE)
+    fig.update_traces(
+        textinfo="label+percent",
+        textfont=dict(size=12, color=INK),
+        marker=dict(line=dict(color="#FFFFFF", width=2)),
+    )
+    fig = _apply_base_layout(fig, title)
+    fig.update_layout(showlegend=False)
     return fig
 
 
@@ -79,8 +106,9 @@ def calendar_heatmap(
 ) -> go.Figure:
     """
     Generic GitHub-style calendar heatmap: weeks along x, weekday
-    along y, colored by value_col that day. Used for both the Study
-    heatmap and the task-completion streak heatmap.
+    along y, colored by value_col that day. Used for the Study
+    heatmap, the Dashboard coding-streak heatmap, and the task-
+    completion streak heatmap.
     """
     if df.empty:
         return go.Figure()
@@ -105,13 +133,67 @@ def calendar_heatmap(
             colorscale=colorscale,
             hovertemplate=f"Week %{{x}}<br>%{{y}}: %{{z:.0f}}{hover_suffix}<extra></extra>",
             showscale=True,
+            xgap=3,
+            ygap=3,
+            colorbar=dict(thickness=12, outlinewidth=0, tickfont=dict(color=MUTED, size=11)),
         )
     )
-    fig.update_layout(
-        title=title,
-        margin=dict(l=10, r=10, t=50, b=10),
-        xaxis_title="",
-        yaxis_title="",
-        xaxis=dict(showticklabels=False),
+    fig = _apply_base_layout(fig, title)
+    fig.update_layout(xaxis=dict(showticklabels=False, showgrid=False), yaxis=dict(showgrid=False))
+    return fig
+
+
+def activity_heatmap(df: pd.DataFrame, title: str = "App Activity") -> go.Figure:
+    """
+    The Dashboard's overall app-activity heatmap: colored by a
+    combined study+coding intensity score, with a rich hover showing
+    the exact date, hours studied, and problems solved that day --
+    not just coding, so it reflects the whole app's streak. Expects
+    df from analytics.study_analytics.combined_daily_activity
+    (columns: date, hours, problems, score).
+    """
+    if df.empty:
+        return go.Figure()
+
+    data = df.copy()
+    data["weekday"] = data["date"].dt.weekday
+    data["week_key"] = data["date"].dt.strftime("%G-W%V")
+    data["date_label"] = data["date"].dt.strftime("%d %b %Y")
+
+    week_order = sorted(data["week_key"].unique())
+    weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    def _pivot(value_col, fill=0):
+        return data.pivot_table(
+            index="weekday", columns="week_key", values=value_col, aggfunc="first", fill_value=fill
+        ).reindex(index=range(7), columns=week_order, fill_value=fill)
+
+    pivot_score = data.pivot_table(
+        index="weekday", columns="week_key", values="score", aggfunc="sum", fill_value=0
+    ).reindex(index=range(7), columns=week_order, fill_value=0)
+    pivot_hours = _pivot("hours")
+    pivot_problems = _pivot("problems")
+    pivot_dates = _pivot("date_label", fill="")
+
+    customdata = np.dstack([pivot_dates.values, pivot_hours.values, pivot_problems.values])
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=pivot_score.values,
+            x=pivot_score.columns,
+            y=weekday_labels,
+            colorscale="Purples",
+            customdata=customdata,
+            hovertemplate=(
+                "%{customdata[0]}<br>📚 %{customdata[1]:.1f}h studied"
+                "<br>🧩 %{customdata[2]:.0f} problem(s)<extra></extra>"
+            ),
+            showscale=True,
+            xgap=3,
+            ygap=3,
+            colorbar=dict(thickness=12, outlinewidth=0, tickfont=dict(color=MUTED, size=11)),
+        )
     )
+    fig = _apply_base_layout(fig, title)
+    fig.update_layout(xaxis=dict(showticklabels=False, showgrid=False), yaxis=dict(showgrid=False))
     return fig

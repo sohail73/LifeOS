@@ -1,43 +1,59 @@
 """
-pages/6_Snapshots.py
+pages/7_Snapshots.py
 
 Historical snapshots (product spec sections 31-34). A snapshot
 freezes a period's key numbers so they don't change when new data
 comes in later, which is what makes comparison and "Time Machine"
 style browsing meaningful.
 
-v0.1 keeps this on-demand: the user creates a snapshot for the
-current week/month with a button, rather than a background
-scheduler (which would need a process outside Streamlit's normal
-request/response cycle).
+The current-period weekly/monthly/yearly snapshots are refreshed
+automatically once a day (see auth.session.require_login ->
+analytics.snapshot.ensure_current_snapshots) -- there's no
+background scheduler in a Streamlit app, so "automatic" here means
+"kept up to date whenever you have the app open." The buttons below
+let you force a refresh (or capture a past period) on demand too.
 """
 
 import streamlit as st
 
-from analytics.snapshot import build_and_save_monthly_snapshot, build_and_save_weekly_snapshot
-from auth.session import current_user_id, require_login
+from analytics.snapshot import (
+    build_and_save_monthly_snapshot,
+    build_and_save_weekly_snapshot,
+    build_and_save_yearly_snapshot,
+)
+from auth.session import current_user_id, current_user_name, require_login
 from database.queries import get_snapshots_df
+from database.queries import get_avatar_base64
+from utils.ui import render_sidebar_branding
 
-st.set_page_config(page_title="Snapshots - LifeOS", page_icon="🕰️", layout="wide")
+st.set_page_config(page_title="Snapshots - LifeOS", page_icon="⚡", layout="wide")
 require_login()
 
 user_id = current_user_id()
+render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
 st.title("Snapshots")
-st.caption("Freeze your current progress so you can look back on it later.")
+st.caption(
+    "Your current week/month/year snapshot refreshes automatically each day you use LifeOS. "
+    "Use these buttons to force an immediate refresh."
+)
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
-    if st.button("Save This Week's Snapshot", use_container_width=True):
+    if st.button("📸 Refresh This Week", use_container_width=True):
         snap = build_and_save_weekly_snapshot(user_id)
         st.success(f"Saved snapshot for {snap['period_label']}.")
 with col2:
-    if st.button("Save This Month's Snapshot", use_container_width=True):
+    if st.button("📸 Refresh This Month", use_container_width=True):
         snap = build_and_save_monthly_snapshot(user_id)
+        st.success(f"Saved snapshot for {snap['period_label']}.")
+with col3:
+    if st.button("📸 Refresh This Year", use_container_width=True):
+        snap = build_and_save_yearly_snapshot(user_id)
         st.success(f"Saved snapshot for {snap['period_label']}.")
 
 st.divider()
 
-weekly_tab, monthly_tab, compare_tab = st.tabs(["Weekly", "Monthly", "Compare"])
+weekly_tab, monthly_tab, yearly_tab, compare_tab = st.tabs(["Weekly", "Monthly", "Yearly", "Compare"])
 
 
 def _render_snapshot_table(snapshot_type: str) -> None:
@@ -60,6 +76,9 @@ with weekly_tab:
 
 with monthly_tab:
     _render_snapshot_table("monthly")
+
+with yearly_tab:
+    _render_snapshot_table("yearly")
 
 with compare_tab:
     st.subheader("Compare Two Snapshots")

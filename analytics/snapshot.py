@@ -48,15 +48,20 @@ def _goal_completion(study_df: pd.DataFrame, coding_df: pd.DataFrame, goals: dic
     return round(sum(completions) / len(completions) * 100, 1)
 
 
-def build_and_save_weekly_snapshot(user_id: int, reference_day: date | None = None) -> dict:
-    """Build the snapshot for the ISO week containing reference_day (default: today)."""
+def build_and_save_weekly_snapshot(
+    user_id: int, reference_day: date | None = None, study_df: pd.DataFrame | None = None,
+    coding_df: pd.DataFrame | None = None, goals: dict | None = None,
+) -> dict:
+    """Build the snapshot for the ISO week containing reference_day (default: today).
+    study_df/coding_df/goals can be passed in to avoid re-querying when
+    building multiple snapshots (weekly+monthly+yearly) back to back."""
     reference_day = reference_day or date.today()
     start = reference_day - timedelta(days=reference_day.weekday())  # Monday
     end = start + timedelta(days=6)
 
-    study_df = get_study_sessions_df(user_id)
-    coding_df = get_coding_logs_df(user_id)
-    goals = get_goals(user_id)
+    study_df = get_study_sessions_df(user_id) if study_df is None else study_df
+    coding_df = get_coding_logs_df(user_id) if coding_df is None else coding_df
+    goals = get_goals(user_id) if goals is None else goals
 
     period_mask_study = (
         (study_df["date"].dt.date >= start) & (study_df["date"].dt.date <= end)
@@ -72,7 +77,7 @@ def build_and_save_weekly_snapshot(user_id: int, reference_day: date | None = No
     study_hours = round(study_df.loc[period_mask_study, "duration_minutes"].sum() / 60, 2) if not study_df.empty else 0.0
     problems_solved = int(period_mask_coding.sum()) if not coding_df.empty else 0
     current_streak, _ = sa.get_streaks(study_df)
-    goal_completion = _goal_completion(study_df, coding_df, goals, start, end)
+    goal_completion = _goal_completion(study_df, coding_df, goals, start, min(end, date.today()))
 
     year, week_num, _ = start.isocalendar()
     period_label = f"{year}-W{week_num:02d}"
@@ -100,16 +105,19 @@ def build_and_save_weekly_snapshot(user_id: int, reference_day: date | None = No
     }
 
 
-def build_and_save_monthly_snapshot(user_id: int, reference_day: date | None = None) -> dict:
+def build_and_save_monthly_snapshot(
+    user_id: int, reference_day: date | None = None, study_df: pd.DataFrame | None = None,
+    coding_df: pd.DataFrame | None = None, goals: dict | None = None,
+) -> dict:
     """Build the snapshot for the calendar month containing reference_day (default: today)."""
     reference_day = reference_day or date.today()
     start = reference_day.replace(day=1)
     next_month = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
     end = next_month - timedelta(days=1)
 
-    study_df = get_study_sessions_df(user_id)
-    coding_df = get_coding_logs_df(user_id)
-    goals = get_goals(user_id)
+    study_df = get_study_sessions_df(user_id) if study_df is None else study_df
+    coding_df = get_coding_logs_df(user_id) if coding_df is None else coding_df
+    goals = get_goals(user_id) if goals is None else goals
 
     period_mask_study = (
         (study_df["date"].dt.date >= start) & (study_df["date"].dt.date <= end)
@@ -150,3 +158,77 @@ def build_and_save_monthly_snapshot(user_id: int, reference_day: date | None = N
         "current_streak": current_streak,
         "goal_completion": goal_completion,
     }
+
+
+def build_and_save_yearly_snapshot(
+    user_id: int, reference_day: date | None = None, study_df: pd.DataFrame | None = None,
+    coding_df: pd.DataFrame | None = None, goals: dict | None = None,
+) -> dict:
+    """Build the snapshot for the calendar year containing reference_day (default: today)."""
+    reference_day = reference_day or date.today()
+    start = date(reference_day.year, 1, 1)
+    end = date(reference_day.year, 12, 31)
+
+    study_df = get_study_sessions_df(user_id) if study_df is None else study_df
+    coding_df = get_coding_logs_df(user_id) if coding_df is None else coding_df
+    goals = get_goals(user_id) if goals is None else goals
+
+    period_mask_study = (
+        (study_df["date"].dt.date >= start) & (study_df["date"].dt.date <= end)
+        if not study_df.empty
+        else pd.Series(dtype=bool)
+    )
+    period_mask_coding = (
+        (coding_df["date_solved"].dt.date >= start) & (coding_df["date_solved"].dt.date <= end)
+        if not coding_df.empty
+        else pd.Series(dtype=bool)
+    )
+
+    study_hours = round(study_df.loc[period_mask_study, "duration_minutes"].sum() / 60, 2) if not study_df.empty else 0.0
+    problems_solved = int(period_mask_coding.sum()) if not coding_df.empty else 0
+    current_streak, _ = sa.get_streaks(study_df)
+    goal_completion = _goal_completion(study_df, coding_df, goals, start, min(end, date.today()))
+
+    period_label = str(reference_day.year)
+
+    save_snapshot(
+        user_id=user_id,
+        snapshot_type="yearly",
+        period_label=period_label,
+        period_start=start.isoformat(),
+        period_end=end.isoformat(),
+        study_hours=study_hours,
+        problems_solved=problems_solved,
+        current_streak=current_streak,
+        goal_completion=goal_completion,
+    )
+
+    return {
+        "period_label": period_label,
+        "period_start": start,
+        "period_end": end,
+        "study_hours": study_hours,
+        "problems_solved": problems_solved,
+        "current_streak": current_streak,
+        "goal_completion": goal_completion,
+    }
+
+
+def ensure_current_snapshots(user_id: int) -> None:
+    """
+    Silently refreshes this user's weekly/monthly/yearly snapshots for
+    the CURRENT period. There's no true background scheduler in a
+    Streamlit app -- it only runs while someone has it open -- so this
+    is called once per day per session (see auth.session.require_login)
+    to approximate "automatic" snapshots: whenever the user opens the
+    app on a new day, the current-period snapshots quietly catch up.
+    Each call is a safe upsert (see database.queries.save_snapshot),
+    so calling it repeatedly just refreshes the same row.
+    """
+    study_df = get_study_sessions_df(user_id)
+    coding_df = get_coding_logs_df(user_id)
+    goals = get_goals(user_id)
+
+    build_and_save_weekly_snapshot(user_id, study_df=study_df, coding_df=coding_df, goals=goals)
+    build_and_save_monthly_snapshot(user_id, study_df=study_df, coding_df=coding_df, goals=goals)
+    build_and_save_yearly_snapshot(user_id, study_df=study_df, coding_df=coding_df, goals=goals)

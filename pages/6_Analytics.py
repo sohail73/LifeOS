@@ -10,15 +10,18 @@ import streamlit as st
 
 from analytics import coding_analytics as ca
 from analytics import study_analytics as sa
-from auth.session import current_user_id, require_login
+from auth.session import current_user_id, current_user_name, require_login
 from database.queries import get_coding_logs_df, get_study_sessions_df
 from utils.helper import format_duration
 from widgets.charts import bar_chart, donut_chart, line_chart, multi_line_chart, study_heatmap
+from database.queries import get_avatar_base64
+from utils.ui import render_sidebar_branding
 
-st.set_page_config(page_title="Analytics - LifeOS", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Analytics - LifeOS", page_icon="⚡", layout="wide")
 require_login()
 
 user_id = current_user_id()
+render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
 st.title("Analytics")
 
 study_df = get_study_sessions_df(user_id)
@@ -42,8 +45,9 @@ with study_tab:
     else:
         st.subheader("How much have I studied, and when?")
         daily = sa.daily_totals(study_df, days=30)
+        daily["hours"] = (daily["duration_minutes"] / 60).round(2)
         st.plotly_chart(
-            line_chart(daily, "date", "duration_minutes", "Study Time -- Last 30 Days", "Minutes"),
+            line_chart(daily, "date", "hours", "Study Time -- Last 30 Days", "Hours"),
             use_container_width=True,
         )
 
@@ -55,15 +59,16 @@ with study_tab:
             for _, row in breakdown.iterrows():
                 st.write(f"**{row['subject']}**: {format_duration(row['duration_minutes'])}")
             st.plotly_chart(
-                donut_chart(breakdown, "subject", "duration_minutes", "Time by Subject"),
+                donut_chart(breakdown, "subject", "hours", "Time by Subject"),
                 use_container_width=True,
             )
 
         with col2:
             st.subheader("Which days am I most productive?")
             weekday = sa.weekday_totals(study_df)
+            weekday["avg_hours"] = (weekday["avg_minutes"] / 60).round(2)
             st.plotly_chart(
-                bar_chart(weekday, "weekday", "avg_minutes", "Average Study Minutes by Weekday"),
+                bar_chart(weekday, "weekday", "avg_hours", "Average Study Hours by Weekday"),
                 use_container_width=True,
             )
 

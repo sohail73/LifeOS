@@ -107,3 +107,17 @@ def authenticate_user(email: str, plain_password: str) -> Optional[dict]:
         return None
 
     return {"id": row["id"], "name": row["name"], "email": row["email"]}
+
+
+def change_password(user_id: int, email: str, current_password: str, new_password: str) -> bool:
+    """
+    Verifies current_password is correct, then updates to new_password.
+    Returns False (and changes nothing) if current_password is wrong.
+    """
+    if authenticate_user(email, current_password) is None:
+        return False
+
+    from database.queries import update_password_hash
+
+    update_password_hash(user_id, hash_password(new_password))
+    return True

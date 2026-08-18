@@ -98,3 +98,30 @@ def yearly_wrapped(study_df: pd.DataFrame, coding_df: pd.DataFrame, year: int) -
         "best_month": best_month,
         "has_data": study_hours > 0 or total_problems > 0,
     }
+
+
+def get_available_months(study_df: pd.DataFrame, coding_df: pd.DataFrame) -> list[tuple[int, int]]:
+    """
+    Every (year, month) from the user's earliest recorded activity up
+    to the current month, most recent first -- the month list for the
+    "Your Journey" timeline. Empty if there's no data at all.
+    """
+    earliest_dates = []
+    if not study_df.empty:
+        earliest_dates.append(study_df["date"].min().date())
+    if not coding_df.empty:
+        earliest_dates.append(coding_df["date_solved"].min().date())
+    if not earliest_dates:
+        return []
+
+    earliest = min(earliest_dates)
+    cursor = date(earliest.year, earliest.month, 1)
+    today = date.today()
+
+    months = []
+    while cursor <= today:
+        months.append((cursor.year, cursor.month))
+        cursor = date(cursor.year + (cursor.month // 12), (cursor.month % 12) + 1, 1)
+
+    months.reverse()  # most recent first
+    return months
