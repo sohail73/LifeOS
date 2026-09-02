@@ -166,7 +166,7 @@ recent_col1, recent_col2 = st.columns(2)
 
 with recent_col1:
     with st.container(border=True):
-        st.markdown("** Latest Study Sessions**")
+        st.markdown("**Latest Study Sessions**")
         if study_df.empty:
             st.caption("No study sessions logged yet.")
         else:
@@ -179,7 +179,7 @@ with recent_col1:
 
 with recent_col2:
     with st.container(border=True):
-        st.markdown("** Latest Problems Solved**")
+        st.markdown("**Latest Problems Solved**")
         if coding_df.empty:
             st.caption("No coding activity yet.")
         else:

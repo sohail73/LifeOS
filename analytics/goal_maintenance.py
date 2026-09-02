@@ -288,3 +288,47 @@ def auto_promote_ready_projects(user_id: int) -> list[str]:
             promoted.append(project["title"])
 
     return promoted
+
+
+def auto_promote_ready_jobs(user_id: int) -> list[str]:
+    """
+    Same idea as auto_promote_ready_projects, but for job targets:
+    any "In Progress" job target whose linked goal(s) are all now
+    100% complete gets automatically promoted to "Ready". Returns the
+    titles of any job target promoted this call.
+    """
+    from analytics.tasks_analytics import goal_progress
+    from database.queries import get_job_targets, get_linked_goals_for_job_target, get_tasks_df, update_job_target
+
+    promoted = []
+    for job in get_job_targets(user_id):
+        if job["status"] != "In Progress":
+            continue
+
+        linked_goals = get_linked_goals_for_job_target(user_id, job["id"])
+        if not linked_goals:
+            continue
+
+        all_complete = True
+        for goal in linked_goals:
+            tasks_df = get_tasks_df(user_id, goal_id=goal["id"])
+            progress = goal_progress(goal, tasks_df)
+            if progress["total_tasks"] == 0 or progress["completion_pct"] < 100:
+                all_complete = False
+                break
+
+        if all_complete:
+            update_job_target(
+                user_id,
+                job["id"],
+                title=job["title"],
+                company=job["company"] or "",
+                status="Ready",
+                notes=job["notes"] or "",
+                deadline=job.get("deadline"),
+            )
+            promoted.append(job["title"])
+
+    return promoted
+
+    return promoted

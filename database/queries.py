@@ -1114,3 +1114,416 @@ def get_linked_future_topics_for_project(user_id: int, project_id: int) -> list:
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Career milestones (a roadmap of targets: internship, placement,
+# hackathon, competition, job -- each with an optional target date)
+# ---------------------------------------------------------------------------
+
+def add_career_milestone(
+    user_id: int,
+    milestone_type: str,
+    title: str,
+    target_date: Optional[str] = None,
+    status: str = "Upcoming",
+    notes: str = "",
+) -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO career_milestones
+                (user_id, milestone_type, title, target_date, status, notes)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                milestone_type,
+                title.strip(),
+                target_date,
+                status,
+                notes.strip() if notes else None,
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_career_milestones(user_id: int) -> list:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, milestone_type, title, target_date, status, notes, created_at
+            FROM career_milestones
+            WHERE user_id = ?
+            ORDER BY (target_date IS NULL), target_date, created_at
+            """,
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_career_milestone(
+    user_id: int,
+    milestone_id: int,
+    milestone_type: str,
+    title: str,
+    target_date: Optional[str],
+    status: str,
+    notes: str,
+) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE career_milestones
+            SET milestone_type = ?, title = ?, target_date = ?, status = ?, notes = ?
+            WHERE user_id = ? AND id = ?
+            """,
+            (
+                milestone_type,
+                title.strip(),
+                target_date,
+                status,
+                notes.strip() if notes else None,
+                user_id,
+                milestone_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_career_milestone(user_id: int, milestone_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM career_milestones WHERE user_id = ? AND id = ?", (user_id, milestone_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Reward milestones (a personal reward ladder: "once I reach X, I'll
+# do/get Y" -- trigger_value is optional, used only to sort the ladder)
+# ---------------------------------------------------------------------------
+
+def add_reward_milestone(
+    user_id: int,
+    milestone_label: str,
+    reward_description: str,
+    trigger_value: Optional[float] = None,
+    notes: str = "",
+) -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO reward_milestones
+                (user_id, milestone_label, trigger_value, reward_description, notes)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                milestone_label.strip(),
+                trigger_value,
+                reward_description.strip(),
+                notes.strip() if notes else None,
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_reward_milestones(user_id: int) -> list:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, milestone_label, trigger_value, reward_description, is_achieved, notes, created_at
+            FROM reward_milestones
+            WHERE user_id = ?
+            ORDER BY (trigger_value IS NULL), trigger_value, created_at
+            """,
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_reward_milestone(
+    user_id: int,
+    reward_id: int,
+    milestone_label: str,
+    reward_description: str,
+    trigger_value: Optional[float],
+    notes: str,
+) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE reward_milestones
+            SET milestone_label = ?, reward_description = ?, trigger_value = ?, notes = ?
+            WHERE user_id = ? AND id = ?
+            """,
+            (
+                milestone_label.strip(),
+                reward_description.strip(),
+                trigger_value,
+                notes.strip() if notes else None,
+                user_id,
+                reward_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def toggle_reward_milestone(user_id: int, reward_id: int, is_achieved: bool) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE reward_milestones SET is_achieved = ? WHERE user_id = ? AND id = ?",
+            (1 if is_achieved else 0, user_id, reward_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_reward_milestone(user_id: int, reward_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM reward_milestones WHERE user_id = ? AND id = ?", (user_id, reward_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Job targets (which jobs the user is aiming for: Ready / In Progress
+# / Future -- In Progress can be linked to long-term goal(s), same
+# auto-promote-to-Ready pattern as projects)
+# ---------------------------------------------------------------------------
+
+def add_job_target(
+    user_id: int,
+    title: str,
+    company: str = "",
+    status: str = "Future",
+    notes: str = "",
+    deadline: Optional[str] = None,
+) -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO job_targets (user_id, title, company, status, notes, deadline)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                title.strip(),
+                company.strip() if company else None,
+                status,
+                notes.strip() if notes else None,
+                deadline,
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_job_targets(user_id: int) -> list:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, title, company, status, notes, deadline, created_at FROM job_targets "
+            "WHERE user_id = ? ORDER BY (deadline IS NULL), deadline, created_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_job_target(
+    user_id: int,
+    job_target_id: int,
+    title: str,
+    company: str,
+    status: str,
+    notes: str,
+    deadline: Optional[str] = None,
+) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE job_targets
+            SET title = ?, company = ?, status = ?, notes = ?, deadline = ?
+            WHERE user_id = ? AND id = ?
+            """,
+            (
+                title.strip(),
+                company.strip() if company else None,
+                status,
+                notes.strip() if notes else None,
+                deadline,
+                user_id,
+                job_target_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_job_target_achieved(user_id: int, job_target_id: int) -> None:
+    """"Mil gayi" -- got the job before (or by) the deadline."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE job_targets SET status = 'Achieved' WHERE user_id = ? AND id = ?",
+            (user_id, job_target_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_job_target(user_id: int, job_target_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM job_targets WHERE user_id = ? AND id = ?", (user_id, job_target_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def link_job_target_goal(user_id: int, job_target_id: int, goal_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO job_target_goals (job_target_id, goal_id) "
+            "SELECT ?, ? WHERE EXISTS (SELECT 1 FROM job_targets WHERE id = ? AND user_id = ?)",
+            (job_target_id, goal_id, job_target_id, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def unlink_job_target_goal(user_id: int, job_target_id: int, goal_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM job_target_goals WHERE job_target_id = ? AND goal_id = ? "
+            "AND EXISTS (SELECT 1 FROM job_targets WHERE id = ? AND user_id = ?)",
+            (job_target_id, goal_id, job_target_id, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_linked_goals_for_job_target(user_id: int, job_target_id: int) -> list:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT g.id, g.title, g.start_date, g.end_date, g.notes
+            FROM job_target_goals jg
+            JOIN long_term_goals g ON g.id = jg.goal_id
+            JOIN job_targets j ON j.id = jg.job_target_id
+            WHERE jg.job_target_id = ? AND j.user_id = ?
+            ORDER BY g.start_date
+            """,
+            (job_target_id, user_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Career notes (a free-form scratchpad -- anything worth jotting down
+# so you don't forget it: "this job needs one more goal I haven't
+# created yet", reminders, loose ideas, whatever)
+# ---------------------------------------------------------------------------
+
+def add_career_note(user_id: int, content: str) -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO career_notes (user_id, content) VALUES (?, ?)",
+            (user_id, content.strip()),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_career_notes(user_id: int) -> list:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, content, is_done, created_at FROM career_notes "
+            "WHERE user_id = ? ORDER BY is_done, created_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_career_note(user_id: int, note_id: int, content: str) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE career_notes SET content = ? WHERE user_id = ? AND id = ?",
+            (content.strip(), user_id, note_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def toggle_career_note(user_id: int, note_id: int, is_done: bool) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE career_notes SET is_done = ? WHERE user_id = ? AND id = ?",
+            (1 if is_done else 0, user_id, note_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_career_note(user_id: int, note_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM career_notes WHERE user_id = ? AND id = ?", (user_id, note_id))
+        conn.commit()
+    finally:
+        conn.close()

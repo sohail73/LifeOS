@@ -49,6 +49,10 @@ CODING_TOPICS = [
     "Other",
 ]
 
+CAREER_MILESTONE_TYPES = ["Internship", "Placement", "Hackathon", "Competition", "Job", "Other"]
+CAREER_MILESTONE_STATUSES = ["Upcoming", "Achieved"]
+JOB_TARGET_STATUSES = ["Ready", "In Progress", "Future", "Achieved"]
+
 DEFAULT_DAILY_STUDY_GOAL_MINUTES = 60
 DEFAULT_DAILY_PROBLEMS_GOAL = 2
 

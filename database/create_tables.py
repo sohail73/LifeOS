@@ -287,6 +287,108 @@ def create_project_future_topics_table(conn) -> None:
     )
 
 
+def create_career_milestones_table(conn) -> None:
+    # A roadmap entry for an internship, placement, hackathon,
+    # competition, or job -- a target you're aiming for by a certain
+    # date. Kept separate from long_term_goals (which is about daily
+    # study tasks) since a milestone here is a single target, not a
+    # day-by-day schedule.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS career_milestones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            milestone_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            target_date TEXT,
+            status TEXT NOT NULL DEFAULT 'Upcoming',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def create_reward_milestones_table(conn) -> None:
+    # A personal reward ladder: "once I reach X, I'll do/buy Y".
+    # trigger_value is optional and only used to sort the ladder
+    # (e.g. 10, 20, 30 for LPA figures) -- the label is what's shown.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reward_milestones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            milestone_label TEXT NOT NULL,
+            trigger_value REAL,
+            reward_description TEXT NOT NULL,
+            is_achieved INTEGER NOT NULL DEFAULT 0,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def create_job_targets_table(conn) -> None:
+    # Which job(s) the user is aiming for: Ready (qualified now),
+    # In Progress (working toward it, usually via a linked long-term
+    # goal -- see job_target_goals below), or Future (something to
+    # aim for later). Mirrors the projects table's status pattern.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_targets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            company TEXT,
+            status TEXT NOT NULL DEFAULT 'Future',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def create_job_target_goals_table(conn) -> None:
+    # Many-to-many: an "In Progress" job target can be tracked by one
+    # or more long-term goals; when every linked goal reaches 100%
+    # completion, the job target auto-promotes to "Ready" (see
+    # analytics/goal_maintenance.py), same pattern as project_goals.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_target_goals (
+            job_target_id INTEGER NOT NULL,
+            goal_id INTEGER NOT NULL,
+            PRIMARY KEY (job_target_id, goal_id),
+            FOREIGN KEY (job_target_id) REFERENCES job_targets (id) ON DELETE CASCADE,
+            FOREIGN KEY (goal_id) REFERENCES long_term_goals (id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def create_career_notes_table(conn) -> None:
+    # A free-form scratchpad for the Career page -- "remember to do X
+    # later", "this job needs one more goal I haven't created yet",
+    # or literally anything else worth jotting down and not losing
+    # track of. Deliberately unstructured (just text + a done flag).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS career_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            is_done INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
 def initialize_database() -> None:
     """Create the database file (if needed), all current tables, and
     apply any column migrations needed for databases created by an
@@ -307,6 +409,11 @@ def initialize_database() -> None:
         create_known_skills_table(conn)
         create_project_goals_table(conn)
         create_project_future_topics_table(conn)
+        create_career_milestones_table(conn)
+        create_reward_milestones_table(conn)
+        create_job_targets_table(conn)
+        create_job_target_goals_table(conn)
+        create_career_notes_table(conn)
         _run_migrations(conn)
         conn.commit()
     finally:
@@ -360,6 +467,10 @@ def _run_migrations(conn) -> None:
         """
     )
 
+    # job_targets: an optional deadline ("crack this job by 30 Jan") so
+    # the Career page can show a countdown / how much time is left.
+    _ensure_column(conn, "job_targets", "deadline", "TEXT")
+
 
 if __name__ == "__main__":
     initialize_database()
@@ -367,5 +478,6 @@ if __name__ == "__main__":
     print(
         "Tables ready: users, subjects, study_sessions, coding_logs, goals, "
         "snapshots, long_term_goals, tasks, languages, projects, future_topics, "
-        "known_skills, project_goals, project_future_topics"
+        "known_skills, project_goals, project_future_topics, career_milestones, "
+        "reward_milestones, job_targets, job_target_goals, career_notes"
     )

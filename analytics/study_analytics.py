@@ -79,6 +79,46 @@ def daily_totals(df: pd.DataFrame, days: int = 30) -> pd.DataFrame:
     return result
 
 
+def monthly_totals(df: pd.DataFrame, months: int = 12) -> pd.DataFrame:
+    """
+    Study minutes per calendar month for the last `months` months
+    (including the current one), zero-filled so a month with no
+    sessions still shows up as 0 instead of being skipped. Columns:
+    month (Period), month_label ("Jun 2026"), duration_minutes.
+    """
+    end_period = pd.Period(date.today(), freq="M")
+    periods = pd.period_range(end=end_period, periods=months, freq="M")
+
+    if df.empty:
+        grouped = pd.Series(0.0, index=periods)
+    else:
+        working = df.copy()
+        working["year_month"] = working["date"].dt.to_period("M")
+        grouped = working.groupby("year_month")["duration_minutes"].sum()
+        grouped = grouped.reindex(periods, fill_value=0.0)
+
+    result = grouped.reset_index()
+    result.columns = ["month", "duration_minutes"]
+    result["month_label"] = result["month"].dt.strftime("%b %Y")
+    return result
+
+
+def yearly_totals(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Study minutes per calendar year, for every year that has at least
+    one session. Columns: year (str), duration_minutes.
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["year", "duration_minutes"])
+
+    working = df.copy()
+    working["year"] = working["date"].dt.year
+    grouped = working.groupby("year")["duration_minutes"].sum().reset_index()
+    grouped = grouped.sort_values("year")
+    grouped["year"] = grouped["year"].astype(str)
+    return grouped
+
+
 def weekday_totals(df: pd.DataFrame) -> pd.DataFrame:
     """Average minutes studied per day-of-week, Monday first."""
     order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]

@@ -333,9 +333,10 @@ def difficulty_badge(difficulty: str) -> str:
 
 
 def status_badge(status: str) -> str:
-    """Project status -> pre-colored badge."""
+    """Project/job-target/milestone status -> pre-colored badge."""
     color = {
         "Ready": "green", "In Progress": "purple", "Planned": "grey", "On Hold": "amber", "Done": "green",
+        "Future": "grey", "Upcoming": "grey", "Achieved": "green",
     }.get(status, "grey")
     return badge(status, color)
 

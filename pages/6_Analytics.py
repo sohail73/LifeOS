@@ -44,12 +44,31 @@ with study_tab:
         st.info("No study data yet. Start your first study session to unlock this section.")
     else:
         st.subheader("How much have I studied, and when?")
-        daily = sa.daily_totals(study_df, days=30)
-        daily["hours"] = (daily["duration_minutes"] / 60).round(2)
-        st.plotly_chart(
-            line_chart(daily, "date", "hours", "Study Time -- Last 30 Days", "Hours"),
-            use_container_width=True,
+        granularity = st.radio(
+            "View by", ["Daily", "Monthly", "Yearly"], horizontal=True, key="study_trend_granularity"
         )
+
+        if granularity == "Daily":
+            daily = sa.daily_totals(study_df, days=30)
+            daily["hours"] = (daily["duration_minutes"] / 60).round(2)
+            st.plotly_chart(
+                line_chart(daily, "date", "hours", "Study Time -- Last 30 Days", "Hours"),
+                use_container_width=True,
+            )
+        elif granularity == "Monthly":
+            monthly = sa.monthly_totals(study_df, months=12)
+            monthly["hours"] = (monthly["duration_minutes"] / 60).round(2)
+            st.plotly_chart(
+                line_chart(monthly, "month_label", "hours", "Study Time -- Last 12 Months", "Hours"),
+                use_container_width=True,
+            )
+        else:
+            yearly = sa.yearly_totals(study_df)
+            yearly["hours"] = (yearly["duration_minutes"] / 60).round(2)
+            st.plotly_chart(
+                line_chart(yearly, "year", "hours", "Study Time -- By Year", "Hours"),
+                use_container_width=True,
+            )
 
         col1, col2 = st.columns(2)
         with col1:
