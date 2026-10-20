@@ -5,8 +5,8 @@ Small, reusable Plotly chart builders. Every function returns a
 plotly.graph_objects Figure -- pages call st.plotly_chart(fig, ...)
 on the result. Keeping chart construction here (instead of inline in
 every page) means one consistent, professional look across
-Dashboard, Analytics, AI Insights, and Wrapped -- matching the light
-purple-accent theme in .streamlit/config.toml and utils/ui.py.
+Dashboard, Analytics, AI Insights, and Wrapped -- matching the
+indigo accent theme (CampusX One inspired) in .streamlit/config.toml and utils/ui.py.
 """
 
 import numpy as np
@@ -14,14 +14,15 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-PRIMARY_COLOR = "#274245"
-PRIMARY_COLOR_SOFT = "rgba(39, 66, 69, 0.18)"
-INK = "#1B2426"
-MUTED = "#5C6B69"
-GRID_COLOR = "#EFEAD8"
-COLOR_SEQUENCE = ["#274245", "#DFD6AE", "#3D6B66", "#C97B4A", "#7A9E97", "#B99A5B", "#5C6B69"]
+PRIMARY_COLOR = "#6558E0"
+PRIMARY_COLOR_SOFT = "rgba(101, 88, 224, 0.16)"
+INK = "#14141F"
+MUTED = "#6B7084"
+GRID_COLOR = "#ECEAF5"
+# indigo first, then the reference site's blue / orange / green / amber accents
+COLOR_SEQUENCE = ["#6558E0", "#2F7BE5", "#F2784B", "#2FA36B", "#F5A623", "#A99BF5", "#6B7084"]
 
-_FONT = dict(family="sans-serif", color=INK, size=13)
+_FONT = dict(family="Inter, sans-serif", color=INK, size=13)
 
 
 def _apply_base_layout(fig: go.Figure, title: str = "") -> go.Figure:
@@ -29,7 +30,7 @@ def _apply_base_layout(fig: go.Figure, title: str = "") -> go.Figure:
     background, clean gridlines, consistent typography, and a bold
     left-aligned title matching the rest of the app's visual language."""
     fig.update_layout(
-        title=dict(text=title, font=dict(size=16, color=INK, family="sans-serif"), x=0, xanchor="left"),
+        title=dict(text=title, font=dict(size=16, color=INK, family="Space Grotesk, Inter, sans-serif"), x=0, xanchor="left"),
         font=_FONT,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -92,7 +93,7 @@ def study_heatmap(df: pd.DataFrame, title: str = "Study Activity") -> go.Figure:
     """
     return calendar_heatmap(
         df, date_col="date", value_col="duration_minutes", title=title,
-        colorscale="Purples", hover_suffix=" min",
+        colorscale="Greens", hover_suffix=" min",
     )
 
 
@@ -101,7 +102,7 @@ def calendar_heatmap(
     date_col: str,
     value_col: str,
     title: str,
-    colorscale: str = "Purples",
+    colorscale: str = "Greens",
     hover_suffix: str = "",
 ) -> go.Figure:
     """
@@ -143,6 +144,14 @@ def calendar_heatmap(
     return fig
 
 
+def gym_heatmap(df: pd.DataFrame, title: str = "Gym Activity") -> go.Figure:
+    """GitHub-style calendar heatmap of workout minutes per day."""
+    return calendar_heatmap(
+        df, date_col="date", value_col="duration_minutes", title=title,
+        colorscale="Greens", hover_suffix=" min",
+    )
+
+
 def activity_heatmap(df: pd.DataFrame, title: str = "App Activity") -> go.Figure:
     """
     The Dashboard's overall app-activity heatmap: colored by a
@@ -182,7 +191,7 @@ def activity_heatmap(df: pd.DataFrame, title: str = "App Activity") -> go.Figure
             z=pivot_score.values,
             x=pivot_score.columns,
             y=weekday_labels,
-            colorscale="Purples",
+            colorscale="Greens",
             customdata=customdata,
             hovertemplate=(
                 "%{customdata[0]}<br>📚 %{customdata[1]:.1f}h studied"

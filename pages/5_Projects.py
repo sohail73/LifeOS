@@ -40,14 +40,14 @@ from database.queries import (
     unlink_project_goal,
     update_project,
 )
-from utils.ui import render_sidebar_branding, status_badge
+from utils.ui import page_header, render_sidebar_branding, status_badge
 
 st.set_page_config(page_title="Projects - LifeOS", page_icon="⚡", layout="wide")
 require_login()
 
 user_id = current_user_id()
 render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
-st.title("Projects")
+page_header("Projects", eyebrow="Build")
 st.caption("What you want to build, what you're ready for, and what you're working toward.")
 
 promoted = auto_promote_ready_projects(user_id)

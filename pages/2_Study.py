@@ -14,32 +14,29 @@ import streamlit as st
 
 from auth.session import current_user_id, current_user_name, require_login
 from database.queries import (
-    add_future_topic,
     add_study_session,
     add_subject,
-    delete_future_topic,
     delete_subject,
-    get_future_topics,
     get_subject_session_count,
     get_subjects,
 )
 from utils.helper import format_duration
 from database.queries import get_avatar_base64
-from utils.ui import render_sidebar_branding, live_timer_display
+from utils.ui import page_header, render_sidebar_branding, live_timer_display
 
 st.set_page_config(page_title="Study - LifeOS", page_icon="⚡", layout="wide")
 require_login()
 
 user_id = current_user_id()
 render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
-st.title("Study")
+page_header("Study", eyebrow="Deep work")
 
 subjects = get_subjects(user_id)
 subject_names = [s["name"] for s in subjects]
 subject_lookup = {s["name"]: s["id"] for s in subjects}
 
-timer_tab, manual_tab, subjects_tab, future_tab = st.tabs(
-    ["Study Timer", "Manual Entry", "Subjects", "Future Topics"]
+timer_tab, manual_tab, subjects_tab = st.tabs(
+    ["Study Timer", "Manual Entry", "Subjects"]
 )
 
 # ---------------------------------------------------------------------------
@@ -219,44 +216,4 @@ with subjects_tab:
         else:
             add_subject(user_id, new_subject)
             st.success(f"Added subject: {new_subject.strip()}")
-            st.rerun()
-
-# ---------------------------------------------------------------------------
-# Future Topics -- a "someday/maybe" study wishlist
-# ---------------------------------------------------------------------------
-with future_tab:
-    st.subheader("What I Want to Study in the Future")
-    st.caption(
-        "A running list of topics/subjects you want to get to eventually -- not tied to any "
-        "date or goal yet. When you're ready to actually schedule one, turn it into a Long-Term "
-        "Goal on the Goals & Tasks page."
-    )
-
-    future_topics = get_future_topics(user_id)
-
-    if not future_topics:
-        st.caption("Nothing on your list yet -- add your first idea below.")
-    else:
-        for topic in future_topics:
-            with st.container(border=True):
-                title_col, delete_col = st.columns([5, 1])
-                title_col.markdown(f"**🔮 {topic['title']}**")
-                if topic["notes"]:
-                    title_col.caption(topic["notes"])
-                if delete_col.button("🗑️", key=f"del_future_{topic['id']}"):
-                    delete_future_topic(user_id, topic["id"])
-                    st.rerun()
-
-    st.divider()
-    with st.form("add_future_topic_form"):
-        new_future_title = st.text_input("Topic", placeholder="e.g. Kubernetes basics, Rust ownership model")
-        new_future_notes = st.text_area("Notes (optional)", placeholder="Why you want to learn this, resources, etc.")
-        add_future_submitted = st.form_submit_button("Add to List", use_container_width=True)
-
-    if add_future_submitted:
-        if not new_future_title.strip():
-            st.error("Topic can't be empty.")
-        else:
-            add_future_topic(user_id, new_future_title, new_future_notes)
-            st.success(f"Added '{new_future_title.strip()}' to your future topics.")
             st.rerun()

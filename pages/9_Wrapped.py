@@ -14,14 +14,14 @@ from analytics.wrapped import get_available_months, monthly_wrapped, yearly_wrap
 from auth.session import current_user_id, current_user_name, require_login
 from database.queries import get_coding_logs_df, get_snapshots_df, get_study_sessions_df
 from database.queries import get_avatar_base64
-from utils.ui import kpi_card_row, render_sidebar_branding
+from utils.ui import page_header, kpi_card_row, render_sidebar_branding
 
 st.set_page_config(page_title="Wrapped - LifeOS", page_icon="⚡", layout="wide")
 require_login()
 
 user_id = current_user_id()
 render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
-st.title("Wrapped")
+page_header("Wrapped", eyebrow="Your recap")
 
 study_df = get_study_sessions_df(user_id)
 coding_df = get_coding_logs_df(user_id)

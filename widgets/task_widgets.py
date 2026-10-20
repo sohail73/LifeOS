@@ -13,8 +13,15 @@ from datetime import date
 
 import streamlit as st
 
-from database.queries import complete_task_with_session, delete_task, reschedule_task, toggle_task, uncomplete_task
-from utils.ui import duration_input
+from database.queries import (
+    complete_task_with_session,
+    delete_task,
+    reschedule_task,
+    set_task_priority,
+    toggle_task,
+    uncomplete_task,
+)
+from utils.ui import duration_input, priority_badge
 
 
 def render_task_checklist(
@@ -27,13 +34,24 @@ def render_task_checklist(
     compact: bool = False,
 ) -> None:
     """
-    compact=True (Dashboard) shows just a checkbox + title -- no
-    reschedule/delete buttons, keeping those management actions on
-    the Goals & Tasks page as the single place to manage tasks.
+    compact=True (Dashboard) shows just a checkbox + title (with a
+    priority badge, so you can see at a glance what to do first) --
+    no reschedule/delete/priority-change controls, keeping those
+    management actions on the Goals & Tasks page as the single place
+    to manage tasks. Tasks are always passed in already sorted by
+    priority (see database.queries.get_tasks_for_date), so this
+    function doesn't re-sort them.
+
+    Order within a priority tier comes from each goal's position (set
+    once with Up/Down on the goal card in Goals & Tasks), so there are
+    no per-task reorder buttons here.
     """
     if not tasks:
         st.caption("No tasks for this date.")
         return
+
+    priority_options = {"High": 1, "Medium": 2, "Low": 3}
+    priority_labels = {1: "High", 2: "Medium", 3: "Low"}
 
     for task in tasks:
         row_key = f"{key_prefix}_{task['id']}"
@@ -41,12 +59,13 @@ def render_task_checklist(
         reschedule_key = f"show_reschedule_{row_key}"
 
         was_done = bool(task["is_done"])
+        priority = task.get("priority", 2)
 
         if compact:
             col_check, col_title = st.columns([1, 6])
-            col_reschedule = col_delete = None
+            col_priority = col_reschedule = col_delete = None
         else:
-            col_check, col_title, col_reschedule, col_delete = st.columns([1, 4, 1, 1])
+            col_check, col_title, col_priority, col_reschedule, col_delete = st.columns([1, 3, 2, 1, 1])
 
         new_done = col_check.checkbox("", value=was_done, key=f"check_{row_key}")
 
@@ -55,10 +74,32 @@ def render_task_checklist(
             label += f"  ·  🕐 {task['planned_start_time']}–{task['planned_end_time']}"
         if task.get("goal_title"):
             label += f"  ·  🏁 {task['goal_title']}"
+
         if was_done:
             col_title.markdown(f"~~{label}~~")
+        elif compact:
+            # Badge goes on the SAME line as the title (not a separate
+            # markdown call below it), so it sits beside the text
+            # instead of wrapping onto its own row underneath.
+            col_title.markdown(f"{label} &nbsp; {priority_badge(priority)}", unsafe_allow_html=True)
         else:
             col_title.write(label)
+
+        if not compact:
+            if task.get("goal_id"):
+                # Priority is inherited from the goal (set once there,
+                # not per day) -- show it read-only here, change it on
+                # the goal itself to affect every task under it.
+                col_priority.markdown(priority_badge(priority), unsafe_allow_html=True)
+            else:
+                new_priority_label = col_priority.selectbox(
+                    "Priority", ["High", "Medium", "Low"],
+                    index=["High", "Medium", "Low"].index(priority_labels.get(priority, "Medium")),
+                    key=f"priority_{row_key}", label_visibility="collapsed",
+                )
+                if priority_options[new_priority_label] != priority:
+                    set_task_priority(user_id, task["id"], priority_options[new_priority_label])
+                    st.rerun()
 
         if col_reschedule is not None and col_reschedule.button(
             "📅", key=f"resched_btn_{row_key}", help="Reschedule this task"

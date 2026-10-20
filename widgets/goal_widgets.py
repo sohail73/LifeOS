@@ -22,13 +22,16 @@ from database.queries import (
     extend_goal_end_date,
     get_tasks_df,
     get_tasks_for_goal,
+    goal_move_availability,
+    move_goal_order,
     reschedule_task,
+    set_goal_priority,
     toggle_task,
     uncomplete_task,
     update_goal_notes,
 )
 from analytics.goal_maintenance import pull_task_forward
-from utils.ui import duration_input, progress_bar_html
+from utils.ui import duration_input, priority_badge, progress_bar_html
 
 
 def render_goal_card(
@@ -57,15 +60,29 @@ def render_goal_card(
 
     with st.container(border=True):
         if editable and show_delete:
-            title_col, extend_col, delete_col = st.columns([3, 1, 1])
+            title_col, up_col, down_col, extend_col, delete_col = st.columns([4, 1, 1, 2, 2])
         elif editable:
-            title_col, extend_col = st.columns([4, 1])
+            title_col, up_col, down_col, extend_col = st.columns([5, 1, 1, 2])
             delete_col = None
         else:
             title_col = st.container()
-            extend_col = delete_col = None
+            up_col = down_col = extend_col = delete_col = None
 
-        title_col.markdown(f"**🏁 {goal['title']}**")
+        title_col.markdown(f"**🏁 {goal['title']}** &nbsp; {priority_badge(goal.get('priority', 2))}", unsafe_allow_html=True)
+        if editable:
+            can_up, can_down = goal_move_availability(user_id, goal["id"])
+            if up_col.button(
+                "Up", key=f"goal_up_{context_key}_{goal['id']}", disabled=not can_up,
+                help="Move up among goals of the same priority -- applies to every day's tasks, permanently.",
+            ):
+                move_goal_order(user_id, goal["id"], "up")
+                st.rerun()
+            if down_col.button(
+                "Down", key=f"goal_down_{context_key}_{goal['id']}", disabled=not can_down,
+                help="Move down among goals of the same priority -- applies to every day's tasks, permanently.",
+            ):
+                move_goal_order(user_id, goal["id"], "down")
+                st.rerun()
         if editable and extend_col.button("⏳ Extend", key=f"extend_btn_{context_key}_{goal['id']}"):
             st.session_state[extend_key] = not st.session_state.get(extend_key, False)
         if delete_col is not None and delete_col.button("🗑️ Delete", key=f"del_goal_{context_key}_{goal['id']}"):
@@ -82,21 +99,30 @@ def render_goal_card(
 
         if editable:
             if st.button(
-                "✏️ Edit description" if goal.get("notes") else "✏️ Add description",
+                "✏️ Edit description & priority" if goal.get("notes") else "✏️ Add description & priority",
                 key=f"edit_notes_btn_{context_key}_{goal['id']}",
             ):
                 st.session_state[edit_notes_key] = not st.session_state.get(edit_notes_key, False)
 
             if st.session_state.get(edit_notes_key):
+                priority_labels = ["High", "Medium", "Low"]
+                priority_values = {"High": 1, "Medium": 2, "Low": 3}
+                current_priority = {1: "High", 2: "Medium", 3: "Low"}.get(goal.get("priority", 2), "Medium")
                 with st.form(f"notes_form_{context_key}_{goal['id']}"):
                     new_notes = st.text_area(
                         "Description", value=goal.get("notes") or "", key=f"notes_input_{context_key}_{goal['id']}"
                     )
+                    new_priority_label = st.selectbox(
+                        "Priority", priority_labels, index=priority_labels.index(current_priority),
+                        help="Every task under this goal inherits this priority automatically.",
+                        key=f"priority_input_{context_key}_{goal['id']}",
+                    )
                     save_notes = st.form_submit_button("Save")
                 if save_notes:
                     update_goal_notes(user_id, goal["id"], new_notes)
+                    set_goal_priority(user_id, goal["id"], priority_values[new_priority_label])
                     del st.session_state[edit_notes_key]
-                    st.success("Description updated.")
+                    st.success("Updated.")
                     st.rerun()
 
         progress_bar_html(

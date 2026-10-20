@@ -16,14 +16,14 @@ from auth.auth_utils import authenticate_user, change_password
 from auth.session import current_user_email, current_user_id, current_user_name, logout, require_login
 from database.queries import get_custom_quote, get_goals, reset_user_data, set_avatar_base64, set_custom_quote, update_goals
 from database.queries import get_avatar_base64
-from utils.ui import avatar_img_tag, duration_input, render_sidebar_branding
+from utils.ui import page_header, avatar_img_tag, duration_input, render_sidebar_branding
 
 st.set_page_config(page_title="Settings - LifeOS", page_icon="⚙️", layout="centered")
 require_login()
 
 user_id = current_user_id()
 render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
-st.title("Settings")
+page_header("Settings", eyebrow="Preferences")
 
 st.subheader("Profile")
 st.write(f"**Name:** {current_user_name()}")

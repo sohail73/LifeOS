@@ -49,9 +49,17 @@ CODING_TOPICS = [
     "Other",
 ]
 
-CAREER_MILESTONE_TYPES = ["Internship", "Placement", "Hackathon", "Competition", "Job", "Other"]
-CAREER_MILESTONE_STATUSES = ["Upcoming", "Achieved"]
+WORKOUT_TYPES = [
+    "Push", "Pull", "Legs",
+    "Chest", "Back", "Shoulders", "Arms", "Biceps", "Triceps", "Abs/Core",
+    "Upper Body", "Lower Body", "Full Body", "Cardio", "Rest Day", "Other",
+]
+
+TASK_PRIORITIES = {1: "High", 2: "Medium", 3: "Low"}
+TASK_PRIORITY_LABELS = ["High", "Medium", "Low"]
+
 JOB_TARGET_STATUSES = ["Ready", "In Progress", "Future", "Achieved"]
+ROADMAP_STEP_STATUSES = ["Ready", "In Progress", "Future"]
 
 DEFAULT_DAILY_STUDY_GOAL_MINUTES = 60
 DEFAULT_DAILY_PROBLEMS_GOAL = 2

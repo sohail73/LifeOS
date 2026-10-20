@@ -24,14 +24,14 @@ from analytics.snapshot import (
 from auth.session import current_user_id, current_user_name, require_login
 from database.queries import get_snapshots_df
 from database.queries import get_avatar_base64
-from utils.ui import render_sidebar_branding
+from utils.ui import page_header, render_sidebar_branding
 
 st.set_page_config(page_title="Snapshots - LifeOS", page_icon="⚡", layout="wide")
 require_login()
 
 user_id = current_user_id()
 render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
-st.title("Snapshots")
+page_header("Snapshots", eyebrow="Progress history")
 st.caption(
     "Your current week/month/year snapshot refreshes automatically each day you use LifeOS. "
     "Use these buttons to force an immediate refresh."

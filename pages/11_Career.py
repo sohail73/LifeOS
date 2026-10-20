@@ -1,11 +1,13 @@
 """
 pages/11_Career.py
 
-Career planning, in three parts:
+Career planning, in five parts:
 
-1. Roadmap -- a timeline of targets you're aiming for: an internship,
-   placement, hackathon, competition, or job, each with an optional
-   target date and a status (Upcoming / Achieved).
+1. Roadmap -- your learning path as a flowchart: a sequence of steps
+   (e.g. Data Science, then DL, then MLOps, then Cloud Computing,
+   then AWS, then LLM, then RAG), each Ready (done) / In Progress
+   (running) / Future (not started), reorderable, and linkable to a
+   goal -- once that goal hits 100%, the step auto-promotes to Ready.
 
 2. Reward Ladder -- a personal "once I reach X, I'll do/get Y" list,
    e.g. milestone salary figures paired with what you'll do once you
@@ -19,157 +21,246 @@ Career planning, in three parts:
    or Achieved (you got it). Give a job a deadline ("crack this by
    30 Jan") to see a countdown, and mark it Achieved any time --
    before or after the deadline -- once you land it.
+
+4. Notes -- a free-form career scratchpad.
+
+5. Future Topics -- a "someday/maybe" study wishlist (moved here from
+   the Study page, since it's really about what's next for your
+   career/learning rather than day-to-day studying).
 """
 
 from datetime import date
 
 import streamlit as st
 
-from analytics.goal_maintenance import auto_promote_ready_jobs
+from analytics.goal_maintenance import (
+    auto_advance_roadmap_lanes,
+    auto_promote_ready_jobs,
+    auto_promote_ready_roadmap_steps,
+    roadmap_step_progress_pct,
+)
 from analytics.tasks_analytics import goal_progress
 from auth.session import current_user_id, current_user_name, require_login
-from config.constants import CAREER_MILESTONE_STATUSES, CAREER_MILESTONE_TYPES, JOB_TARGET_STATUSES
+from config.constants import JOB_TARGET_STATUSES, ROADMAP_STEP_STATUSES
 from database.queries import (
-    add_career_milestone,
     add_career_note,
+    add_future_topic,
     add_job_target,
     add_reward_milestone,
-    delete_career_milestone,
+    add_roadmap_step,
     delete_career_note,
+    delete_future_topic,
     delete_job_target,
     delete_reward_milestone,
+    delete_roadmap_step,
     get_avatar_base64,
-    get_career_milestones,
     get_career_notes,
+    get_future_topics,
     get_job_targets,
     get_linked_goals_for_job_target,
+    get_linked_goals_for_roadmap_step,
     get_long_term_goals,
     get_reward_milestones,
+    get_roadmap_steps,
     get_tasks_df,
     link_job_target_goal,
+    link_roadmap_step_goal,
     mark_job_target_achieved,
+    move_roadmap_step,
+    set_job_target_pinned,
     toggle_career_note,
     toggle_reward_milestone,
     unlink_job_target_goal,
-    update_career_milestone,
+    unlink_roadmap_step_goal,
     update_career_note,
     update_job_target,
     update_reward_milestone,
+    update_roadmap_step,
 )
-from utils.ui import progress_bar_html, render_sidebar_branding, status_badge
+from utils.ui import page_header, progress_bar_html, render_sidebar_branding, roadmap_flowchart_html, status_badge
 
 st.set_page_config(page_title="Career - LifeOS", page_icon="⚡", layout="wide")
 require_login()
 
 user_id = current_user_id()
 render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
-st.title("Career")
-st.caption("Your roadmap, your reward ladder, and the jobs you're aiming for.")
+page_header("Career", eyebrow="Roadmap and targets")
+st.caption("Your learning roadmap, your reward ladder, and the jobs you're aiming for.")
 
 promoted_jobs = auto_promote_ready_jobs(user_id)
 for title in promoted_jobs:
     st.toast(f"'{title}' is complete -- moved to Ready!")
 
-roadmap_tab, rewards_tab, jobs_tab, notes_tab = st.tabs(["Roadmap", "Reward Ladder", "Job Targets", "Notes"])
+roadmap_tab, rewards_tab, jobs_tab, notes_tab, future_topics_tab = st.tabs(
+    ["Roadmap", "Reward Ladder", "Job Targets", "Notes", "Future Topics"]
+)
 
 # ---------------------------------------------------------------------------
-# Roadmap
+# Roadmap -- a sequential learning path shown as a flowchart
 # ---------------------------------------------------------------------------
 with roadmap_tab:
-    st.subheader("Your Roadmap")
+    st.subheader("Your Learning Roadmap")
     st.caption(
-        "Targets you're working toward -- an internship, placement, hackathon, "
-        "competition, or job -- each with an optional target date."
+        "The order you're learning things in -- e.g. Data Science, then DL, then MLOps, "
+        "then Cloud Computing, then AWS, then LLM, then RAG. Each step is Ready (done), "
+        "In Progress (running), or Future (not started yet), and can be linked to a goal -- "
+        "once that goal is 100% complete, the step auto-promotes to Ready. Learning two "
+        "things at once (say Data Science and Java)? Put them on separate tracks: they show "
+        "side by side, and when a step finishes only its own track moves on to the next "
+        "step -- the other track keeps running in parallel. Inside a track, steps that share "
+        "the same Step number run in parallel too (say FastAPI and Cloud both as Step 4): "
+        "they stack one below the other, with arrows from the step before them and on to the "
+        "step after them. The next step starts once all of them are Ready."
     )
 
-    milestones = get_career_milestones(user_id)
+    promoted_steps = auto_promote_ready_roadmap_steps(user_id)
+    for title in promoted_steps:
+        st.toast(f"'{title}' is complete -- moved to Ready!")
+    for title in auto_advance_roadmap_lanes(user_id):
+        st.toast(f"Next up on its track: '{title}' is now In Progress.")
 
-    if not milestones:
-        st.info("Nothing here yet. Add your first target below.")
+    all_goals_for_roadmap = get_long_term_goals(user_id)
+    steps = get_roadmap_steps(user_id)
+
+    if not steps:
+        st.info("Nothing here yet. Add your first step below.")
     else:
-        type_filter = st.selectbox("Filter by type", ["All"] + CAREER_MILESTONE_TYPES, key="roadmap_type_filter")
-        visible = (
-            milestones
-            if type_filter == "All"
-            else [m for m in milestones if m["milestone_type"] == type_filter]
-        )
+        flow_items = []
+        for s in steps:
+            linked = get_linked_goals_for_roadmap_step(user_id, s["id"])
+            flow_items.append(
+                {
+                    "order_index": s["order_index"],
+                    "title": s["title"],
+                    "status": s["status"],
+                    "lane": s["lane"],
+                    "progress_pct": roadmap_step_progress_pct(user_id, s),
+                    "goal_titles": [g["title"] for g in linked],
+                }
+            )
+        roadmap_flowchart_html(flow_items)
 
-        if not visible:
-            st.caption(f"Nothing of type '{type_filter}'.")
+        st.divider()
+        st.markdown("**Manage steps**")
+        for step in steps:
+            lane_stages = sorted({x["order_index"] for x in steps if x["lane"] == step["lane"]})
+            lane_pos = lane_stages.index(step["order_index"])
+            edit_key = f"editing_step_{step['id']}"
+            links_key = f"editing_step_links_{step['id']}"
+            linked_goals = get_linked_goals_for_roadmap_step(user_id, step["id"])
 
-        for m in visible:
-            edit_key = f"editing_milestone_{m['id']}"
             with st.container(border=True):
-                title_col, meta_col, edit_col, delete_col = st.columns([3, 2, 1, 1])
-                title_col.markdown(f"**{m['title']}**")
-                due_text = f" · target {m['target_date']}" if m["target_date"] else ""
-                meta_col.markdown(
-                    status_badge(m["status"]) + f" &nbsp; *{m['milestone_type']}*" + due_text,
-                    unsafe_allow_html=True,
-                )
-                if edit_col.button("Edit", key=f"edit_milestone_btn_{m['id']}"):
+                title_col, status_col, up_col, down_col, edit_col, delete_col = st.columns([3, 2, 1, 1, 1, 1])
+                title_col.markdown(f"**Track {step['lane']} · Step {step['order_index']}: {step['title']}**")
+                status_col.markdown(status_badge(step["status"]), unsafe_allow_html=True)
+
+                if up_col.button("Move up", key=f"up_step_{step['id']}", disabled=(lane_pos == 0),
+                                 help="Moves this step's whole stage (all steps with the same Step number)."):
+                    move_roadmap_step(user_id, step["id"], "up")
+                    st.rerun()
+                if down_col.button("Move down", key=f"down_step_{step['id']}", disabled=(lane_pos == len(lane_stages) - 1),
+                                   help="Moves this step's whole stage (all steps with the same Step number)."):
+                    move_roadmap_step(user_id, step["id"], "down")
+                    st.rerun()
+                if edit_col.button("Edit", key=f"edit_step_btn_{step['id']}"):
                     st.session_state[edit_key] = not st.session_state.get(edit_key, False)
-                if delete_col.button("Delete", key=f"del_milestone_{m['id']}"):
-                    delete_career_milestone(user_id, m["id"])
+                if delete_col.button("Delete", key=f"del_step_{step['id']}"):
+                    delete_roadmap_step(user_id, step["id"])
                     st.rerun()
 
-                if m["notes"]:
-                    st.caption(m["notes"])
+                if step["notes"]:
+                    st.write(step["notes"])
+                if linked_goals:
+                    st.caption("Tracked by: " + ", ".join(g["title"] for g in linked_goals))
+
+                if st.button("Manage linked goals", key=f"step_links_btn_{step['id']}"):
+                    st.session_state[links_key] = not st.session_state.get(links_key, False)
+
+                if st.session_state.get(links_key):
+                    with st.container(border=True):
+                        st.markdown("**Linked goals** (optional -- for 'In Progress')")
+                        if not linked_goals:
+                            st.caption("None yet.")
+                        for g in linked_goals:
+                            gc1, gc2 = st.columns([5, 1])
+                            gc1.write(g["title"])
+                            if gc2.button("Remove", key=f"unlink_step_goal_{step['id']}_{g['id']}"):
+                                unlink_roadmap_step_goal(user_id, step["id"], g["id"])
+                                st.rerun()
+
+                        available_goals = [
+                            g for g in all_goals_for_roadmap if g["id"] not in {lg["id"] for lg in linked_goals}
+                        ]
+                        if available_goals:
+                            gcol1, gcol2 = st.columns([4, 1])
+                            new_goal_label = gcol1.selectbox(
+                                "Add a goal", [g["title"] for g in available_goals],
+                                key=f"add_step_goal_select_{step['id']}", label_visibility="collapsed",
+                            )
+                            if gcol2.button("Add", key=f"add_step_goal_btn_{step['id']}"):
+                                chosen = next(g for g in available_goals if g["title"] == new_goal_label)
+                                link_roadmap_step_goal(user_id, step["id"], chosen["id"])
+                                st.rerun()
 
                 if st.session_state.get(edit_key):
-                    with st.form(f"edit_milestone_form_{m['id']}"):
-                        e_type = st.selectbox(
-                            "Type", CAREER_MILESTONE_TYPES, index=CAREER_MILESTONE_TYPES.index(m["milestone_type"])
-                        )
-                        e_title = st.text_input("Title", value=m["title"])
-                        e_has_date = st.checkbox("Has a target date", value=bool(m["target_date"]))
-                        e_date = st.date_input(
-                            "Target date",
-                            value=date.fromisoformat(m["target_date"]) if m["target_date"] else date.today(),
-                        )
+                    with st.form(f"edit_step_form_{step['id']}"):
+                        e_title = st.text_input("Step title", value=step["title"])
                         e_status = st.selectbox(
-                            "Status", CAREER_MILESTONE_STATUSES, index=CAREER_MILESTONE_STATUSES.index(m["status"])
+                            "Status", ROADMAP_STEP_STATUSES, index=ROADMAP_STEP_STATUSES.index(step["status"])
                         )
-                        e_notes = st.text_area("Notes", value=m["notes"] or "")
+                        e_lane = st.number_input(
+                            "Track number (steps on different tracks run in parallel)",
+                            min_value=1, value=int(step["lane"]), step=1,
+                        )
+                        e_order = st.number_input(
+                            "Step number (steps with the same number in a track run in parallel)",
+                            min_value=1, value=int(step["order_index"]), step=1,
+                        )
+                        e_notes = st.text_area("Notes", value=step["notes"] or "")
                         save_edit = st.form_submit_button("Save Changes", use_container_width=True)
 
                     if save_edit:
-                        update_career_milestone(
-                            user_id,
-                            m["id"],
-                            milestone_type=e_type,
-                            title=e_title,
-                            target_date=e_date.isoformat() if e_has_date else None,
-                            status=e_status,
-                            notes=e_notes,
+                        # Moving to another track without touching the number = "add at the end there".
+                        keep_end_of_new_lane = int(e_lane) != step["lane"] and int(e_order) == step["order_index"]
+                        update_roadmap_step(
+                            user_id, step["id"], title=e_title, status=e_status, notes=e_notes,
+                            lane=int(e_lane), order_index=None if keep_end_of_new_lane else int(e_order),
                         )
                         del st.session_state[edit_key]
-                        st.success("Updated.")
+                        st.success("Step updated.")
                         st.rerun()
 
     st.divider()
-    st.subheader("Add a Target")
-    with st.form("add_milestone_form"):
-        m_type = st.selectbox("Type", CAREER_MILESTONE_TYPES, key="new_milestone_type")
-        m_title = st.text_input("Title", placeholder="e.g. Summer internship / Product placement / Smart India Hackathon")
-        m_has_date = st.checkbox("Set a target date")
-        m_date = st.date_input("Target date", value=date.today()) if m_has_date else None
-        m_notes = st.text_area("Notes (optional)")
-        m_submitted = st.form_submit_button("Add", use_container_width=True)
+    st.subheader("Add a Step")
+    st.caption(
+        "New steps are added to the end of the chosen track -- reorder them with Move up/down above. "
+        "Pick \"New parallel track\" to start a second chain that runs alongside the others. "
+        "To run a step in parallel with another one in the same track, give it the same Step number."
+    )
+    existing_lanes = sorted({x["lane"] for x in steps})
+    next_lane = (max(existing_lanes) + 1) if existing_lanes else 1
+    lane_choices = {f"Track {n}": n for n in existing_lanes}
+    lane_choices[f"New parallel track (Track {next_lane})"] = next_lane
+    with st.form("add_step_form"):
+        s_title = st.text_input("Step title", placeholder="e.g. Data Science / Deep Learning / MLOps / AWS / RAG")
+        s_lane_label = st.selectbox("Track", list(lane_choices.keys()), key="new_step_lane")
+        s_order = st.number_input(
+            "Step number (0 = add after the last step; same number as an existing step = run in parallel with it)",
+            min_value=0, value=0, step=1, key="new_step_order",
+        )
+        s_status = st.selectbox("Status", ROADMAP_STEP_STATUSES, key="new_step_status")
+        s_notes = st.text_area("Notes (optional)")
+        s_submitted = st.form_submit_button("Add Step", use_container_width=True)
 
-    if m_submitted:
-        if not m_title.strip():
-            st.error("Title can't be empty.")
+    if s_submitted:
+        if not s_title.strip():
+            st.error("Step title can't be empty.")
         else:
-            add_career_milestone(
-                user_id,
-                milestone_type=m_type,
-                title=m_title,
-                target_date=m_date.isoformat() if m_date else None,
-                status="Upcoming",
-                notes=m_notes,
+            add_roadmap_step(
+                user_id, title=s_title, status=s_status, notes=s_notes,
+                lane=lane_choices[s_lane_label], order_index=int(s_order) or None,
             )
-            st.success(f"Added: {m_title.strip()}")
+            st.success(f"Added: {s_title.strip()}")
             st.rerun()
 
 # ---------------------------------------------------------------------------
@@ -304,21 +395,31 @@ with jobs_tab:
             linked_goals = get_linked_goals_for_job_target(user_id, job["id"])
 
             with st.container(border=True):
-                title_col, status_col, achieve_col, edit_col, delete_col = st.columns([3, 2, 2, 1, 1])
+                title_col, status_col, edit_col, delete_col = st.columns([3, 2, 1, 1])
                 company_text = f" -- {job['company']}" if job["company"] else ""
-                title_col.markdown(f"**{job['title']}{company_text}**")
+                package_text = f" ({job['target_package']})" if job["target_package"] else ""
+                title_col.markdown(f"**{job['title']}{company_text}{package_text}**")
                 status_col.markdown(status_badge(job["status"]), unsafe_allow_html=True)
-
-                if job["status"] != "Achieved":
-                    if achieve_col.button("Got it!", key=f"achieve_job_{job['id']}"):
-                        mark_job_target_achieved(user_id, job["id"])
-                        st.rerun()
 
                 if edit_col.button("Edit", key=f"edit_job_btn_{job['id']}"):
                     st.session_state[edit_key] = not st.session_state.get(edit_key, False)
                 if delete_col.button("Delete", key=f"del_job_{job['id']}"):
                     delete_job_target(user_id, job["id"])
                     st.rerun()
+
+                achieve_col, pin_col, _spacer = st.columns([1, 2, 3])
+                if job["status"] != "Achieved":
+                    if achieve_col.button("Got it!", key=f"achieve_job_{job['id']}"):
+                        mark_job_target_achieved(user_id, job["id"])
+                        st.rerun()
+                if job["is_pinned"]:
+                    if pin_col.button("Unpin from Dashboard", key=f"unpin_job_{job['id']}"):
+                        set_job_target_pinned(user_id, job["id"], False)
+                        st.rerun()
+                else:
+                    if pin_col.button("Pin to Dashboard", key=f"pin_job_{job['id']}"):
+                        set_job_target_pinned(user_id, job["id"], True)
+                        st.rerun()
 
                 if job["deadline"]:
                     if job["status"] == "Achieved":
@@ -372,6 +473,7 @@ with jobs_tab:
                     with st.form(f"edit_job_form_{job['id']}"):
                         e_title = st.text_input("Job title", value=job["title"])
                         e_company = st.text_input("Company (optional)", value=job["company"] or "")
+                        e_package = st.text_input("Package/CTC target (optional)", value=job["target_package"] or "", placeholder="e.g. 5 LPA")
                         e_status = st.selectbox(
                             "Status", JOB_TARGET_STATUSES, index=JOB_TARGET_STATUSES.index(job["status"])
                         )
@@ -392,6 +494,7 @@ with jobs_tab:
                             status=e_status,
                             notes=e_notes,
                             deadline=e_deadline.isoformat() if e_has_deadline else None,
+                            target_package=e_package,
                         )
                         del st.session_state[edit_key]
                         st.success("Job target updated.")
@@ -402,6 +505,7 @@ with jobs_tab:
     with st.form("add_job_form"):
         j_title = st.text_input("Job title", placeholder="e.g. Data Analyst / Backend Developer")
         j_company = st.text_input("Company (optional)", placeholder="e.g. TCS, or leave blank for any")
+        j_package = st.text_input("Package/CTC target (optional)", placeholder="e.g. 5 LPA")
         j_status = st.selectbox("Status", JOB_TARGET_STATUSES, key="new_job_status")
         j_has_deadline = st.checkbox("Set a deadline (crack this job by...)")
         j_deadline = st.date_input("Deadline", value=date.today()) if j_has_deadline else None
@@ -422,6 +526,7 @@ with jobs_tab:
                 status=j_status,
                 notes=j_notes,
                 deadline=j_deadline.isoformat() if j_deadline else None,
+                target_package=j_package,
             )
             for g in all_goals:
                 if g["title"] in j_linked_goal_titles:
@@ -507,3 +612,43 @@ with notes_tab:
                     if delete_col.button("Delete", key=f"del_note_{note['id']}"):
                         delete_career_note(user_id, note["id"])
                         st.rerun()
+
+# ---------------------------------------------------------------------------
+# Future Topics -- a "someday/maybe" study wishlist
+# ---------------------------------------------------------------------------
+with future_topics_tab:
+    st.subheader("What I Want to Study in the Future")
+    st.caption(
+        "A running list of topics/subjects you want to get to eventually -- not tied to any "
+        "date or goal yet. When you're ready to actually schedule one, turn it into a Long-Term "
+        "Goal on the Goals & Tasks page, or add it as a step on your Roadmap above."
+    )
+
+    future_topics = get_future_topics(user_id)
+
+    if not future_topics:
+        st.caption("Nothing on your list yet -- add your first idea below.")
+    else:
+        for topic in future_topics:
+            with st.container(border=True):
+                title_col, delete_col = st.columns([5, 1])
+                title_col.markdown(f"**🔮 {topic['title']}**")
+                if topic["notes"]:
+                    title_col.caption(topic["notes"])
+                if delete_col.button("🗑️", key=f"del_future_{topic['id']}"):
+                    delete_future_topic(user_id, topic["id"])
+                    st.rerun()
+
+    st.divider()
+    with st.form("add_future_topic_form"):
+        new_future_title = st.text_input("Topic", placeholder="e.g. Kubernetes basics, Rust ownership model")
+        new_future_notes = st.text_area("Notes (optional)", placeholder="Why you want to learn this, resources, etc.")
+        add_future_submitted = st.form_submit_button("Add to List", use_container_width=True)
+
+    if add_future_submitted:
+        if not new_future_title.strip():
+            st.error("Topic can't be empty.")
+        else:
+            add_future_topic(user_id, new_future_title, new_future_notes)
+            st.success(f"Added '{new_future_title.strip()}' to your future topics.")
+            st.rerun()

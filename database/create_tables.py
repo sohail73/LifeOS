@@ -389,6 +389,69 @@ def create_career_notes_table(conn) -> None:
     )
 
 
+def create_roadmap_steps_table(conn) -> None:
+    # A sequential learning path -- "Data Science, then DL, then
+    # MLOps, then Cloud, then AWS, then LLM, then RAG" -- rendered as
+    # a flowchart on the Career page. order_index controls the
+    # sequence; status is Ready (done) / In Progress (running) /
+    # Future (not started), same vocabulary as job_targets.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS roadmap_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            order_index INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'Future',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def create_roadmap_step_goals_table(conn) -> None:
+    # Many-to-many: a roadmap step can be tracked by one or more
+    # long-term goals; when all linked goals hit 100%, the step
+    # auto-promotes to "Ready" (see analytics/goal_maintenance.py),
+    # same pattern as job_target_goals.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS roadmap_step_goals (
+            step_id INTEGER NOT NULL,
+            goal_id INTEGER NOT NULL,
+            PRIMARY KEY (step_id, goal_id),
+            FOREIGN KEY (step_id) REFERENCES roadmap_steps (id) ON DELETE CASCADE,
+            FOREIGN KEY (goal_id) REFERENCES long_term_goals (id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def create_gym_sessions_table(conn) -> None:
+    # A workout log -- date, type of workout (Push/Pull/Legs/Cardio/
+    # etc.), how long, and freeform notes (exercises, sets/reps, how
+    # it felt). Same shape as study_sessions, just for the gym.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS gym_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            workout_type TEXT NOT NULL,
+            duration_minutes REAL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_gym_sessions_user_date ON gym_sessions (user_id, date)"
+    )
+
+
 def initialize_database() -> None:
     """Create the database file (if needed), all current tables, and
     apply any column migrations needed for databases created by an
@@ -414,6 +477,9 @@ def initialize_database() -> None:
         create_job_targets_table(conn)
         create_job_target_goals_table(conn)
         create_career_notes_table(conn)
+        create_roadmap_steps_table(conn)
+        create_roadmap_step_goals_table(conn)
+        create_gym_sessions_table(conn)
         _run_migrations(conn)
         conn.commit()
     finally:
@@ -452,6 +518,29 @@ def _run_migrations(conn) -> None:
     _ensure_column(conn, "tasks", "linked_session_id", "INTEGER")
     _ensure_column(conn, "tasks", "planned_start_time", "TEXT")
     _ensure_column(conn, "tasks", "planned_end_time", "TEXT")
+    # Priority so the Dashboard can show "do this first, then this,
+    # then this" -- 1 = High, 2 = Medium (default), 3 = Low. Lives on
+    # the task itself for standalone tasks (no goal); a task linked
+    # to a long-term goal instead inherits the goal's priority below,
+    # so setting it once on the goal covers every day's task under
+    # it -- no need to re-set it daily.
+    _ensure_column(conn, "tasks", "priority", "INTEGER NOT NULL DEFAULT 2")
+    _ensure_column(conn, "long_term_goals", "priority", "INTEGER NOT NULL DEFAULT 2")
+    # Manual ordering within a day's same-priority tasks (the "move
+    # up/down" buttons). Existing rows are backfilled with their own
+    # id so today's creation order is preserved exactly; new tasks get
+    # max+1 for their date (see queries.add_task).
+    # roadmap_steps: parallel tracks. Each lane is its own chain of steps
+    # (e.g. lane 1 = Data Science -> DL -> MLOps, lane 2 = Java -> Spring),
+    # drawn side by side; order_index is now the position within a lane.
+    _ensure_column(conn, "roadmap_steps", "lane", "INTEGER NOT NULL DEFAULT 1")
+    # long_term_goals: manual order among goals of the same priority (the
+    # Up/Down buttons on a goal card). 0 = never reordered, in which case
+    # goals fall back to newest-start-first exactly like before. Tasks
+    # under a goal follow this order every day, so it's set once here.
+    _ensure_column(conn, "long_term_goals", "goal_order", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "tasks", "task_order", "INTEGER NOT NULL DEFAULT 0")
+    conn.execute("UPDATE tasks SET task_order = id WHERE task_order = 0")
 
     # projects: optionally link a "Ready"/"In Progress"/etc. aspiration
     # to the long-term goal actively tracking progress toward it. This
@@ -470,6 +559,11 @@ def _run_migrations(conn) -> None:
     # job_targets: an optional deadline ("crack this job by 30 Jan") so
     # the Career page can show a countdown / how much time is left.
     _ensure_column(conn, "job_targets", "deadline", "TEXT")
+    # job_targets: optional package/CTC label (e.g. "5 LPA") shown
+    # alongside the title, and a "pinned" flag -- at most one job
+    # target can be pinned to show its countdown on the Dashboard.
+    _ensure_column(conn, "job_targets", "target_package", "TEXT")
+    _ensure_column(conn, "job_targets", "is_pinned", "INTEGER NOT NULL DEFAULT 0")
 
 
 if __name__ == "__main__":
@@ -479,5 +573,6 @@ if __name__ == "__main__":
         "Tables ready: users, subjects, study_sessions, coding_logs, goals, "
         "snapshots, long_term_goals, tasks, languages, projects, future_topics, "
         "known_skills, project_goals, project_future_topics, career_milestones, "
-        "reward_milestones, job_targets, job_target_goals, career_notes"
+        "reward_milestones, job_targets, job_target_goals, career_notes, "
+        "roadmap_steps, roadmap_step_goals, gym_sessions"
     )

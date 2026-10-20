@@ -326,9 +326,104 @@ def auto_promote_ready_jobs(user_id: int) -> list[str]:
                 status="Ready",
                 notes=job["notes"] or "",
                 deadline=job.get("deadline"),
+                target_package=job.get("target_package") or "",
             )
             promoted.append(job["title"])
 
     return promoted
 
+
+def auto_promote_ready_roadmap_steps(user_id: int) -> list[str]:
+    """
+    Same idea again, for roadmap (learning-path) steps: any "In
+    Progress" step whose linked goal(s) are all now 100% complete
+    gets automatically promoted to "Ready". Returns the titles of any
+    step promoted this call.
+    """
+    from analytics.tasks_analytics import goal_progress
+    from database.queries import (
+        get_linked_goals_for_roadmap_step,
+        get_roadmap_steps,
+        get_tasks_df,
+        update_roadmap_step,
+    )
+
+    promoted = []
+    for step in get_roadmap_steps(user_id):
+        if step["status"] != "In Progress":
+            continue
+
+        linked_goals = get_linked_goals_for_roadmap_step(user_id, step["id"])
+        if not linked_goals:
+            continue
+
+        all_complete = True
+        for goal in linked_goals:
+            tasks_df = get_tasks_df(user_id, goal_id=goal["id"])
+            progress = goal_progress(goal, tasks_df)
+            if progress["total_tasks"] == 0 or progress["completion_pct"] < 100:
+                all_complete = False
+                break
+
+        if all_complete:
+            update_roadmap_step(user_id, step["id"], title=step["title"], status="Ready", notes=step["notes"] or "")
+            promoted.append(step["title"])
+
     return promoted
+
+
+def auto_advance_roadmap_lanes(user_id: int) -> list[str]:
+    """
+    Parallel tracks + parallel steps. Each lane (track) moves forward on
+    its own; inside a lane, steps sharing a step number are one "stage"
+    that runs in parallel (e.g. FastAPI and Cloud both numbered 4).
+
+    When every step of a stage is Ready and the next stage still has
+    Future steps, those Future steps all become In Progress together --
+    i.e. the next stage only starts once the whole previous stage (all
+    its parallel steps) is done. A lane that's still running something
+    (any In Progress step) is left alone, and a lane that was never
+    started (nothing Ready yet) is left alone too. Other lanes aren't
+    touched. Returns the titles of steps started this call.
+    """
+    from database.queries import get_roadmap_steps, update_roadmap_step
+
+    started = []
+    lanes: dict[int, dict[int, list[dict]]] = {}
+    for step in get_roadmap_steps(user_id):
+        lanes.setdefault(step["lane"], {}).setdefault(step["order_index"], []).append(step)
+
+    for stages_by_number in lanes.values():
+        stages = [stages_by_number[n] for n in sorted(stages_by_number)]
+        if any(s["status"] == "In Progress" for stage in stages for s in stage):
+            continue  # this track is already running something
+        for prev_stage, next_stage in zip(stages, stages[1:]):
+            future_steps = [s for s in next_stage if s["status"] == "Future"]
+            if all(s["status"] == "Ready" for s in prev_stage) and future_steps:
+                for nxt in future_steps:
+                    update_roadmap_step(
+                        user_id, nxt["id"], title=nxt["title"], status="In Progress", notes=nxt["notes"] or ""
+                    )
+                    started.append(nxt["title"])
+                break
+    return started
+
+
+def roadmap_step_progress_pct(user_id: int, step: dict) -> float | None:
+    """
+    Completion % of a roadmap step, from the tasks of the goal(s) linked
+    to it (completed tasks / total tasks across all of them). A Ready step
+    is always 100. Returns None when nothing is linked / no tasks exist yet,
+    so the flowchart can show "no goal linked" instead of a fake 0%.
+    """
+    from analytics.tasks_analytics import goal_progress
+    from database.queries import get_linked_goals_for_roadmap_step, get_tasks_df
+
+    if step["status"] == "Ready":
+        return 100.0
+    total = done = 0
+    for goal in get_linked_goals_for_roadmap_step(user_id, step["id"]):
+        progress = goal_progress(goal, get_tasks_df(user_id, goal_id=goal["id"]))
+        total += progress["total_tasks"]
+        done += progress["completed_tasks"]
+    return round(done / total * 100, 1) if total else None

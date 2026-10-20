@@ -26,14 +26,14 @@ from database.queries import (
 )
 from integrations.leetcode_sync import LeetCodeSyncError, preview_new_submissions
 from database.queries import get_avatar_base64
-from utils.ui import difficulty_badge, duration_input, render_sidebar_branding
+from utils.ui import page_header, difficulty_badge, duration_input, render_sidebar_branding
 
 st.set_page_config(page_title="Coding Tracker - LifeOS", page_icon="⚡", layout="wide")
 require_login()
 
 user_id = current_user_id()
 render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
-st.title("Coding Tracker")
+page_header("Coding Tracker", eyebrow="Practice")
 
 ensure_default_languages(user_id)
 languages = get_languages(user_id)

@@ -368,13 +368,19 @@ def get_snapshots_df(user_id: int, snapshot_type: Optional[str] = None) -> pd.Da
 # Long-term goals (e.g. "Crack the job in 60 days", "Finish DSA in 3 months")
 # ---------------------------------------------------------------------------
 
-def add_long_term_goal(user_id: int, title: str, start_date: str, end_date: str, notes: str = "") -> int:
+def add_long_term_goal(
+    user_id: int, title: str, start_date: str, end_date: str, notes: str = "", priority: int = 2
+) -> int:
+    """priority: 1 = High, 2 = Medium (default), 3 = Low -- every task
+    created under this goal inherits it (see get_tasks_for_date), so
+    setting it once here covers every day's task without re-setting
+    it daily."""
     conn = get_connection()
     try:
         cursor = conn.execute(
-            "INSERT INTO long_term_goals (user_id, title, start_date, end_date, notes) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, title.strip(), start_date, end_date, notes.strip() if notes else None),
+            "INSERT INTO long_term_goals (user_id, title, start_date, end_date, notes, priority) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, title.strip(), start_date, end_date, notes.strip() if notes else None, priority),
         )
         conn.commit()
         return cursor.lastrowid
@@ -386,11 +392,81 @@ def get_long_term_goals(user_id: int) -> list:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT id, title, start_date, end_date, notes FROM long_term_goals "
-            "WHERE user_id = ? ORDER BY start_date DESC",
+            "SELECT id, title, start_date, end_date, notes, priority, goal_order FROM long_term_goals "
+            "WHERE user_id = ? ORDER BY priority, goal_order, start_date DESC, id DESC",
             (user_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _goal_priority_tier(conn, user_id: int, goal_id: int) -> list:
+    """Goals sharing this goal's priority, in their current display order."""
+    rows = conn.execute(
+        "SELECT id, priority FROM long_term_goals WHERE user_id = ? "
+        "ORDER BY priority, goal_order, start_date DESC, id DESC",
+        (user_id,),
+    ).fetchall()
+    rows = [dict(r) for r in rows]
+    this = next((r for r in rows if r["id"] == goal_id), None)
+    if this is None:
+        return []
+    return [r["id"] for r in rows if r["priority"] == this["priority"]]
+
+
+def goal_move_availability(user_id: int, goal_id: int) -> tuple:
+    """(can_move_up, can_move_down) among goals of the same priority."""
+    conn = get_connection()
+    try:
+        tier = _goal_priority_tier(conn, user_id, goal_id)
+        if goal_id not in tier:
+            return False, False
+        idx = tier.index(goal_id)
+        return idx > 0, idx < len(tier) - 1
+    finally:
+        conn.close()
+
+
+def move_goal_order(user_id: int, goal_id: int, direction: str) -> None:
+    """
+    Move a goal up or down among goals of the SAME priority (never across
+    High/Medium/Low -- priority still sets the tier). Because every day's
+    tasks inherit their goal's position (see get_tasks_for_date), this is
+    a permanent setting: do it once here instead of per day.
+    direction: 'up' or 'down'.
+    """
+    conn = get_connection()
+    try:
+        tier = _goal_priority_tier(conn, user_id, goal_id)
+        if goal_id not in tier:
+            return
+        idx = tier.index(goal_id)
+        neighbor_idx = idx - 1 if direction == "up" else idx + 1
+        if neighbor_idx < 0 or neighbor_idx >= len(tier):
+            return
+        tier[idx], tier[neighbor_idx] = tier[neighbor_idx], tier[idx]
+        # Renumber the whole tier so legacy ties (all 0) can't make the swap a no-op.
+        for position, gid in enumerate(tier, start=1):
+            conn.execute(
+                "UPDATE long_term_goals SET goal_order = ? WHERE id = ? AND user_id = ?",
+                (position, gid, user_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_goal_priority(user_id: int, goal_id: int, priority: int) -> None:
+    """priority: 1 = High, 2 = Medium, 3 = Low. Every task linked to this
+    goal (past, present, and future) inherits it automatically."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE long_term_goals SET priority = ? WHERE user_id = ? AND id = ?",
+            (priority, user_id, goal_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -457,16 +533,22 @@ def add_task(
     goal_id: Optional[int] = None,
     planned_start_time: Optional[str] = None,
     planned_end_time: Optional[str] = None,
+    priority: int = 2,
 ) -> int:
     """planned_start_time/planned_end_time are optional 'HH:MM' strings --
     when both are given, the completion popup pre-fills the duration
-    from them instead of a flat default."""
+    from them instead of a flat default. priority: 1 = High, 2 = Medium
+    (default), 3 = Low -- controls the order tasks show in on a given day."""
     conn = get_connection()
     try:
+        next_order = conn.execute(
+            "SELECT COALESCE(MAX(task_order), 0) + 1 FROM tasks WHERE user_id = ? AND task_date = ?",
+            (user_id, task_date),
+        ).fetchone()[0]
         cursor = conn.execute(
-            "INSERT INTO tasks (user_id, goal_id, title, task_date, planned_start_time, planned_end_time) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, goal_id, title.strip(), task_date, planned_start_time, planned_end_time),
+            "INSERT INTO tasks (user_id, goal_id, title, task_date, planned_start_time, planned_end_time, priority, task_order) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, goal_id, title.strip(), task_date, planned_start_time, planned_end_time, priority, next_order),
         )
         conn.commit()
         return cursor.lastrowid
@@ -479,7 +561,7 @@ def get_task(user_id: int, task_id: int) -> Optional[dict]:
     try:
         row = conn.execute(
             "SELECT id, title, task_date, is_done, goal_id, linked_session_id, "
-            "planned_start_time, planned_end_time FROM tasks WHERE user_id = ? AND id = ?",
+            "planned_start_time, planned_end_time, priority FROM tasks WHERE user_id = ? AND id = ?",
             (user_id, task_id),
         ).fetchone()
         return dict(row) if row else None
@@ -488,16 +570,24 @@ def get_task(user_id: int, task_id: int) -> Optional[dict]:
 
 
 def get_tasks_for_date(user_id: int, task_date: str) -> list:
+    """
+    A task linked to a long-term goal inherits that goal's priority
+    (set once on the goal, not re-set per day) -- a standalone task
+    (no goal) uses its own priority. COALESCE picks the goal's value
+    when present, falling back to the task's own otherwise.
+    """
     conn = get_connection()
     try:
         rows = conn.execute(
             """
             SELECT t.id, t.title, t.is_done, t.goal_id, t.linked_session_id,
-                   t.planned_start_time, t.planned_end_time, g.title AS goal_title
+                   t.planned_start_time, t.planned_end_time,
+                   COALESCE(g.priority, t.priority) AS priority, g.title AS goal_title
             FROM tasks t
             LEFT JOIN long_term_goals g ON g.id = t.goal_id
             WHERE t.user_id = ? AND t.task_date = ?
-            ORDER BY t.id
+            ORDER BY priority, (t.goal_id IS NULL), g.goal_order, g.start_date DESC, g.id DESC,
+                     t.task_order, t.id
             """,
             (user_id, task_date),
         ).fetchall()
@@ -514,15 +604,30 @@ def get_tasks_for_goal(user_id: int, goal_id: int) -> list:
     try:
         rows = conn.execute(
             """
-            SELECT id, title, task_date, is_done, linked_session_id,
-                   planned_start_time, planned_end_time
-            FROM tasks
-            WHERE user_id = ? AND goal_id = ?
-            ORDER BY task_date, id
+            SELECT t.id, t.title, t.task_date, t.is_done, t.linked_session_id,
+                   t.planned_start_time, t.planned_end_time,
+                   COALESCE(g.priority, t.priority) AS priority
+            FROM tasks t
+            LEFT JOIN long_term_goals g ON g.id = t.goal_id
+            WHERE t.user_id = ? AND t.goal_id = ?
+            ORDER BY t.task_date, t.id
             """,
             (user_id, goal_id),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def set_task_priority(user_id: int, task_id: int, priority: int) -> None:
+    """priority: 1 = High, 2 = Medium, 3 = Low."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE tasks SET priority = ? WHERE user_id = ? AND id = ?",
+            (priority, user_id, task_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -1329,13 +1434,14 @@ def add_job_target(
     status: str = "Future",
     notes: str = "",
     deadline: Optional[str] = None,
+    target_package: str = "",
 ) -> int:
     conn = get_connection()
     try:
         cursor = conn.execute(
             """
-            INSERT INTO job_targets (user_id, title, company, status, notes, deadline)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO job_targets (user_id, title, company, status, notes, deadline, target_package)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -1344,6 +1450,7 @@ def add_job_target(
                 status,
                 notes.strip() if notes else None,
                 deadline,
+                target_package.strip() if target_package else None,
             ),
         )
         conn.commit()
@@ -1356,11 +1463,41 @@ def get_job_targets(user_id: int) -> list:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT id, title, company, status, notes, deadline, created_at FROM job_targets "
-            "WHERE user_id = ? ORDER BY (deadline IS NULL), deadline, created_at DESC",
+            "SELECT id, title, company, status, notes, deadline, target_package, is_pinned, created_at "
+            "FROM job_targets WHERE user_id = ? ORDER BY (deadline IS NULL), deadline, created_at DESC",
             (user_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_pinned_job_target(user_id: int) -> Optional[dict]:
+    """The single job target (if any) pinned to show its countdown on the Dashboard."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, title, company, status, notes, deadline, target_package, is_pinned, created_at "
+            "FROM job_targets WHERE user_id = ? AND is_pinned = 1 LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def set_job_target_pinned(user_id: int, job_target_id: int, pinned: bool) -> None:
+    """Pin a job target's countdown to the Dashboard. Only one can be
+    pinned at a time, so pinning one un-pins any other."""
+    conn = get_connection()
+    try:
+        if pinned:
+            conn.execute("UPDATE job_targets SET is_pinned = 0 WHERE user_id = ?", (user_id,))
+        conn.execute(
+            "UPDATE job_targets SET is_pinned = ? WHERE user_id = ? AND id = ?",
+            (1 if pinned else 0, user_id, job_target_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -1373,13 +1510,14 @@ def update_job_target(
     status: str,
     notes: str,
     deadline: Optional[str] = None,
+    target_package: str = "",
 ) -> None:
     conn = get_connection()
     try:
         conn.execute(
             """
             UPDATE job_targets
-            SET title = ?, company = ?, status = ?, notes = ?, deadline = ?
+            SET title = ?, company = ?, status = ?, notes = ?, deadline = ?, target_package = ?
             WHERE user_id = ? AND id = ?
             """,
             (
@@ -1388,6 +1526,7 @@ def update_job_target(
                 status,
                 notes.strip() if notes else None,
                 deadline,
+                target_package.strip() if target_package else None,
                 user_id,
                 job_target_id,
             ),
@@ -1527,3 +1666,255 @@ def delete_career_note(user_id: int, note_id: int) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Roadmap steps (a sequential learning path -- Data Science, then DL,
+# then MLOps, then Cloud, then AWS, then LLM, then RAG -- shown as a
+# flowchart on the Career page). Same status vocabulary and
+# auto-promote pattern as job_targets: Ready / In Progress / Future.
+# ---------------------------------------------------------------------------
+
+def add_roadmap_step(
+    user_id: int,
+    title: str,
+    status: str = "Future",
+    notes: str = "",
+    lane: int = 1,
+    order_index: Optional[int] = None,
+) -> int:
+    """
+    Adds a step to a lane (parallel track). order_index is the step number
+    within the lane: leave it None/0 to append after the lane's last step,
+    or give an existing number to run in parallel with the other step(s)
+    that share it (e.g. FastAPI and Cloud both numbered 4).
+    """
+    conn = get_connection()
+    try:
+        if not order_index:
+            max_order = conn.execute(
+                "SELECT COALESCE(MAX(order_index), 0) FROM roadmap_steps WHERE user_id = ? AND lane = ?",
+                (user_id, lane),
+            ).fetchone()[0]
+            order_index = max_order + 1
+        cursor = conn.execute(
+            "INSERT INTO roadmap_steps (user_id, title, order_index, status, notes, lane) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, title.strip(), order_index, status, notes.strip() if notes else None, lane),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_roadmap_steps(user_id: int) -> list:
+    """All steps, grouped by lane (track) then in order within the lane."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, title, order_index, status, notes, lane, created_at FROM roadmap_steps "
+            "WHERE user_id = ? ORDER BY lane, order_index, id",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_roadmap_step(
+    user_id: int,
+    step_id: int,
+    title: str,
+    status: str,
+    notes: str,
+    lane: Optional[int] = None,
+    order_index: Optional[int] = None,
+) -> None:
+    """
+    lane=None keeps the current lane; a different lane moves the step to
+    the end of that lane (unless order_index is also given). order_index
+    is the step number inside the lane -- steps sharing a number run in
+    parallel; None leaves it unchanged.
+    """
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE roadmap_steps SET title = ?, status = ?, notes = ? WHERE user_id = ? AND id = ?",
+            (title.strip(), status, notes.strip() if notes else None, user_id, step_id),
+        )
+        if lane is not None:
+            current = conn.execute(
+                "SELECT lane FROM roadmap_steps WHERE user_id = ? AND id = ?", (user_id, step_id)
+            ).fetchone()
+            if current is not None and current["lane"] != lane:
+                max_order = conn.execute(
+                    "SELECT COALESCE(MAX(order_index), 0) FROM roadmap_steps WHERE user_id = ? AND lane = ?",
+                    (user_id, lane),
+                ).fetchone()[0]
+                conn.execute(
+                    "UPDATE roadmap_steps SET lane = ?, order_index = ? WHERE user_id = ? AND id = ?",
+                    (lane, max_order + 1, user_id, step_id),
+                )
+        if order_index:
+            conn.execute(
+                "UPDATE roadmap_steps SET order_index = ? WHERE user_id = ? AND id = ?",
+                (order_index, user_id, step_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_roadmap_step(user_id: int, step_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM roadmap_steps WHERE user_id = ? AND id = ?", (user_id, step_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def move_roadmap_step(user_id: int, step_id: int, direction: str) -> None:
+    """
+    direction: 'up' or 'down'. Moves this step's whole stage (every step
+    sharing its step number in the lane) one stage earlier/later by
+    swapping step numbers with the adjacent stage -- so steps that run in
+    parallel stay together.
+    """
+    conn = get_connection()
+    try:
+        this = conn.execute(
+            "SELECT lane, order_index FROM roadmap_steps WHERE user_id = ? AND id = ?", (user_id, step_id)
+        ).fetchone()
+        if this is None:
+            return
+        stages = [
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT order_index FROM roadmap_steps WHERE user_id = ? AND lane = ? ORDER BY order_index",
+                (user_id, this["lane"]),
+            ).fetchall()
+        ]
+        idx = stages.index(this["order_index"])
+        neighbor_idx = idx - 1 if direction == "up" else idx + 1
+        if neighbor_idx < 0 or neighbor_idx >= len(stages):
+            return
+        a, b = stages[idx], stages[neighbor_idx]
+        where = "user_id = ? AND lane = ? AND order_index = ?"
+        conn.execute(f"UPDATE roadmap_steps SET order_index = -1 WHERE {where}", (user_id, this["lane"], a))
+        conn.execute(f"UPDATE roadmap_steps SET order_index = ? WHERE {where}", (a, user_id, this["lane"], b))
+        conn.execute(f"UPDATE roadmap_steps SET order_index = ? WHERE {where}", (b, user_id, this["lane"], -1))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def link_roadmap_step_goal(user_id: int, step_id: int, goal_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO roadmap_step_goals (step_id, goal_id) "
+            "SELECT ?, ? WHERE EXISTS (SELECT 1 FROM roadmap_steps WHERE id = ? AND user_id = ?)",
+            (step_id, goal_id, step_id, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def unlink_roadmap_step_goal(user_id: int, step_id: int, goal_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM roadmap_step_goals WHERE step_id = ? AND goal_id = ? "
+            "AND EXISTS (SELECT 1 FROM roadmap_steps WHERE id = ? AND user_id = ?)",
+            (step_id, goal_id, step_id, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_linked_goals_for_roadmap_step(user_id: int, step_id: int) -> list:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT g.id, g.title, g.start_date, g.end_date, g.notes
+            FROM roadmap_step_goals sg
+            JOIN long_term_goals g ON g.id = sg.goal_id
+            JOIN roadmap_steps s ON s.id = sg.step_id
+            WHERE sg.step_id = ? AND s.user_id = ?
+            ORDER BY g.start_date
+            """,
+            (step_id, user_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Gym sessions (workout log: date, type, duration, notes)
+# ---------------------------------------------------------------------------
+
+def add_gym_session(
+    user_id: int,
+    date: str,
+    workout_type: str,
+    duration_minutes: Optional[float] = None,
+    notes: str = "",
+) -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO gym_sessions (user_id, date, workout_type, duration_minutes, notes)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, date, workout_type, duration_minutes, notes.strip() if notes else None),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_gym_sessions_df(user_id: int) -> pd.DataFrame:
+    conn = get_connection()
+    try:
+        query = (
+            "SELECT id, date, workout_type, duration_minutes, notes FROM gym_sessions "
+            "WHERE user_id = ? ORDER BY date"
+        )
+        df = pd.read_sql_query(query, conn, params=(user_id,))
+    finally:
+        conn.close()
+
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
+def get_gym_sessions(user_id: int) -> list:
+    """Most-recent-first list of gym sessions, for display/deletion in the UI."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, date, workout_type, duration_minutes, notes FROM gym_sessions "
+            "WHERE user_id = ? ORDER BY date DESC, id DESC",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def delete_gym_session(user_id: int, session_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM gym_sessions WHERE user_id = ? AND id = ?", (user_id, session_id))
+        conn.commit()
+    finally:
+        conn.close()
+

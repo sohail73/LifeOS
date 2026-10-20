@@ -24,6 +24,7 @@ from database.queries import (
     get_custom_quote,
     get_goals,
     get_long_term_goals,
+    get_pinned_job_target,
     get_projects,
     get_study_sessions_df,
     get_subjects,
@@ -31,7 +32,7 @@ from database.queries import (
     get_tasks_for_date,
 )
 from utils.helper import format_duration, get_daily_quote
-from utils.ui import kpi_card_row, progress_bar_html, render_sidebar_branding
+from utils.ui import page_header, countdown_banner_html, kpi_card_row, progress_bar_html, render_sidebar_branding
 from widgets.charts import activity_heatmap
 from widgets.goal_widgets import render_goal_card
 from widgets.task_widgets import render_task_checklist
@@ -41,10 +42,59 @@ require_login()
 
 user_id = current_user_id()
 render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
-st.title("Dashboard")
+page_header("Dashboard", eyebrow="Overview")
 st.caption(f"Here's where things stand today, {current_user_name()}.")
 
 today = date.today()
+
+# ---------------------------------------------------------------------------
+# Pinned job-target countdown -- front and center, so the "why am I
+# doing all this" target is the very first thing you see
+# ---------------------------------------------------------------------------
+pinned_job = get_pinned_job_target(user_id)
+if pinned_job:
+    job_title = pinned_job["title"]
+    if pinned_job["company"]:
+        job_title += f" -- {pinned_job['company']}"
+    package_sub = f"Target package: {pinned_job['target_package']}" if pinned_job["target_package"] else ""
+
+    if pinned_job["status"] == "Achieved":
+        countdown_banner_html(
+            title=job_title,
+            sub=(package_sub + " -- " if package_sub else "") + "You got it!",
+            number="Done",
+            number_label="achieved",
+            variant="achieved",
+        )
+    elif pinned_job["deadline"]:
+        deadline_date = date.fromisoformat(pinned_job["deadline"])
+        days_left = (deadline_date - today).days
+        if days_left > 0:
+            countdown_banner_html(
+                title=job_title,
+                sub=(package_sub + " -- " if package_sub else "") + f"Deadline: {pinned_job['deadline']}",
+                number=str(days_left),
+                number_label=f"day{'s' if days_left != 1 else ''} left",
+            )
+        elif days_left == 0:
+            countdown_banner_html(
+                title=job_title,
+                sub=(package_sub + " -- " if package_sub else "") + "The deadline is today",
+                number="0",
+                number_label="days left",
+                variant="overdue",
+            )
+        else:
+            countdown_banner_html(
+                title=job_title,
+                sub=(package_sub + " -- " if package_sub else "") + f"Deadline was {pinned_job['deadline']}",
+                number=str(abs(days_left)),
+                number_label="days overdue",
+                variant="overdue",
+            )
+    elif package_sub:
+        countdown_banner_html(title=job_title, sub=package_sub, number="--", number_label="no deadline set")
+
 
 # ---------------------------------------------------------------------------
 # Today's Tasks -- front and center, so it's the first thing you see
@@ -104,8 +154,8 @@ coding_current_streak, coding_longest_streak = ca.get_streaks(coding_df)
 kpi_card_row([
     {"icon": " ", "label": "All-Time Study", "value": f"{all_time_hours}h"},
     {"icon": " ", "label": "All-Time Problems", "value": all_time_problems},
-    {"icon": " ", "label": "Study Streak", "value": f"{study_current_streak}d", "sub": f"best {study_longest_streak}d"},
-    {"icon": " ", "label": "Coding Streak", "value": f"{coding_current_streak}d", "sub": f"best {coding_longest_streak}d"},
+    {"icon": " ", "label": "Study Streak", "value": f"{study_current_streak}d", "sub": f"best {study_longest_streak}d", "color": "green"},
+    {"icon": " ", "label": "Coding Streak", "value": f"{coding_current_streak}d", "sub": f"best {coding_longest_streak}d", "color": "green"},
     {"icon": " ", "label": "Active Goals", "value": active_goals_count},
     {"icon": " ", "label": "Projects In Progress", "value": projects_in_progress},
 ])
@@ -134,8 +184,8 @@ overall_goal_pct = round((study_goal_pct + problems_goal_pct) / 2 * 100, 1)
 kpi_card_row([
     {"icon": " ", "label": "Today's Study Time", "value": format_duration(today_minutes)},
     {"icon": " ", "label": "Problems Solved Today", "value": today_problems},
-    {"icon": " ", "label": "Current Streak", "value": f"{study_current_streak} days"},
-    {"icon": " ", "label": "Longest Streak", "value": f"{study_longest_streak} days"},
+    {"icon": " ", "label": "Current Streak", "value": f"{study_current_streak} days", "color": "green"},
+    {"icon": " ", "label": "Longest Streak", "value": f"{study_longest_streak} days", "color": "green"},
 ])
 
 progress_bar_html(overall_goal_pct, label="Today's goal completion")
@@ -200,8 +250,8 @@ if not study_df.empty or not coding_df.empty:
     kpi_card_row([
         {"icon": " ", "label": "Total Studied", "value": f"{all_time_hours}h"},
         {"icon": " ", "label": "Total Solved", "value": all_time_problems},
-        {"icon": " ", "label": "Current Streak", "value": f"{app_current_streak} days"},
-        {"icon": " ", "label": "Max Streak", "value": f"{app_longest_streak} days"},
+        {"icon": " ", "label": "Current Streak", "value": f"{app_current_streak} days", "color": "green"},
+        {"icon": " ", "label": "Max Streak", "value": f"{app_longest_streak} days", "color": "green"},
     ])
 
     activity_df = sa.combined_daily_activity(study_df, coding_df, days=182)

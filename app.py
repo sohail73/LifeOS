@@ -17,9 +17,9 @@ from auth.auth_utils import authenticate_user, create_user
 from auth.session import current_user_id, current_user_name, is_logged_in, login, logout
 from database.create_tables import initialize_database
 from database.queries import ensure_default_subjects, get_avatar_base64
-from utils.ui import render_sidebar_branding
+from utils.ui import inject_global_css, page_header, render_sidebar_branding
 
-st.set_page_config(page_title="LifeOS", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="LifeOS", page_icon="⚡", layout="wide")
 
 initialize_database()
 
@@ -75,24 +75,45 @@ def render_signup_form() -> None:
 
 
 def render_logged_out_view() -> None:
-    st.title("Welcome to LifeOS")
-    st.subheader("Track. Analyze. Improve.")
-    st.write(
-        "LifeOS turns your study and coding activity into real analytics, "
-        "insights, and progress reports -- automatically."
-    )
+    inject_global_css()
 
-    login_tab, signup_tab = st.tabs(["Login", "Create Account"])
-    with login_tab:
-        render_login_form()
-    with signup_tab:
-        render_signup_form()
+    hero_col, form_col = st.columns([1.25, 1], gap="large")
+
+    with hero_col:
+        st.markdown(
+            '<div class="lifeos-pill"><span class="dot"></span>Your personal OS</div>'
+            '<div class="lifeos-hero-title">Life<span class="lifeos-hl">OS</span></div>'
+            '<div class="lifeos-hero-sub">Track. Analyze. Improve.</div>'
+            '<div class="lifeos-checks">'
+            '<div class="lifeos-check"><span class="tick">&#10003;</span>Study timer with daily streaks</div>'
+            '<div class="lifeos-check"><span class="tick">&#10003;</span>Coding tracker and analytics</div>'
+            '<div class="lifeos-check"><span class="tick">&#10003;</span>Goals, tasks and priorities</div>'
+            '<div class="lifeos-check"><span class="tick">&#10003;</span>Career roadmap and countdown</div>'
+            '<div class="lifeos-check"><span class="tick">&#10003;</span>Gym log and weekly progress</div>'
+            '<div class="lifeos-check"><span class="tick">&#10003;</span>Weekly AI insights and recaps</div>'
+            '</div>'
+            '<p style="margin-top:28px;color:#3B4052;max-width:34rem;">'
+            '<span style="color:#F5A623;letter-spacing:2px;">&#9733;&#9733;&#9733;&#9733;&#9733;</span>&nbsp; '
+            'LifeOS turns your study and coding activity into real analytics, insights, and progress '
+            'reports -- automatically, and your data stays in your own database.</p>',
+            unsafe_allow_html=True,
+        )
+
+    with form_col:
+        login_tab, signup_tab = st.tabs(["Login", "Create Account"])
+        with login_tab:
+            render_login_form()
+        with signup_tab:
+            render_signup_form()
 
 
 def render_logged_in_view() -> None:
     render_sidebar_branding(current_user_name(), get_avatar_base64(current_user_id()))
-    st.title("LifeOS")
-    st.subheader(f"Welcome back, {current_user_name()}!")
+    page_header(
+        f"Welcome back, {current_user_name()}",
+        subtitle="Pick up right where you left off.",
+        eyebrow="LifeOS",
+    )
     st.write(
         "Use the sidebar to jump into your **Dashboard**, log a **Study** "
         "session, track a **Coding** problem, plan your **Goals & Tasks**, dig into "

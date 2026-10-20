@@ -34,7 +34,7 @@ from database.queries import (
     get_tasks_df,
     get_tasks_for_date,
 )
-from utils.ui import render_sidebar_branding
+from utils.ui import page_header, render_sidebar_branding
 from widgets.charts import calendar_heatmap
 from widgets.goal_widgets import render_goal_card
 from widgets.task_widgets import render_task_checklist
@@ -44,7 +44,7 @@ require_login()
 
 user_id = current_user_id()
 render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
-st.title("Goals & Tasks")
+page_header("Goals & Tasks", eyebrow="Plan and execute")
 
 tasks_tab, goals_tab, streak_tab = st.tabs(["Today's Tasks", "Long-Term Goals", "Streak"])
 
@@ -74,6 +74,14 @@ with tasks_tab:
     with st.form("add_task_form"):
         new_task_title = st.text_input("New task", placeholder="e.g. Study DBMS chapter 3")
         linked_goal_label = st.selectbox("Link to a goal (optional)", list(goal_options.keys()))
+        new_task_priority = st.selectbox(
+            "Priority (only used if this task has no goal above)", ["High", "Medium", "Low"], index=1,
+            help=(
+                "Controls the order tasks show in -- High first, then Medium, then Low. If you "
+                "link this task to a goal, it uses that goal's priority instead -- set it once on "
+                "the goal and every task under it follows automatically."
+            ),
+        )
         set_time = st.checkbox("Set a planned time (optional)")
         time_col1, time_col2 = st.columns(2)
         with time_col1:
@@ -93,6 +101,7 @@ with tasks_tab:
                 goal_options[linked_goal_label],
                 planned_start_time=planned_start.strftime("%H:%M") if set_time else None,
                 planned_end_time=planned_end.strftime("%H:%M") if set_time else None,
+                priority={"High": 1, "Medium": 2, "Low": 3}[new_task_priority],
             )
             st.success("Task added.")
             st.rerun()
@@ -124,6 +133,10 @@ with goals_tab:
                 help="e.g. 30 for a month, 90 for 3 months, 180 for 6 months",
             )
         goal_notes = st.text_area("Notes (optional)")
+        goal_priority_label = st.selectbox(
+            "Priority", ["High", "Medium", "Low"], index=1,
+            help="Every task under this goal inherits this priority automatically -- set it once here instead of per task.",
+        )
         auto_generate = st.checkbox(
             "Auto-create tasks for this goal",
             value=True,
@@ -150,6 +163,7 @@ with goals_tab:
         if not goal_title.strip():
             st.error("Goal title can't be empty.")
         else:
+            goal_priority_value = {"High": 1, "Medium": 2, "Low": 3}[goal_priority_label]
             parsed_topics = [
                 parse_topic_line(line) for line in topics_text.splitlines() if line.strip()
             ]
@@ -161,7 +175,8 @@ with goals_tab:
                 total_days = sum(t["block_days"] for t in parsed_topics)
                 goal_end = goal_start + timedelta(days=total_days - 1)
                 new_goal_id = add_long_term_goal(
-                    user_id, goal_title, goal_start.isoformat(), goal_end.isoformat(), goal_notes
+                    user_id, goal_title, goal_start.isoformat(), goal_end.isoformat(), goal_notes,
+                    priority=goal_priority_value,
                 )
                 cursor_date = goal_start
                 for t in parsed_topics:
@@ -176,7 +191,8 @@ with goals_tab:
             elif auto_generate and parsed_topics:
                 goal_end = goal_start + timedelta(days=int(duration_days) - 1)
                 new_goal_id = add_long_term_goal(
-                    user_id, goal_title, goal_start.isoformat(), goal_end.isoformat(), goal_notes
+                    user_id, goal_title, goal_start.isoformat(), goal_end.isoformat(), goal_notes,
+                    priority=goal_priority_value,
                 )
                 generated = generate_topic_tasks(goal_start, int(duration_days), parsed_topics)
                 for day_iso, topic_name in generated:
@@ -189,7 +205,8 @@ with goals_tab:
             else:
                 goal_end = goal_start + timedelta(days=int(duration_days) - 1)
                 new_goal_id = add_long_term_goal(
-                    user_id, goal_title, goal_start.isoformat(), goal_end.isoformat(), goal_notes
+                    user_id, goal_title, goal_start.isoformat(), goal_end.isoformat(), goal_notes,
+                    priority=goal_priority_value,
                 )
                 if auto_generate and daily_task_title.strip():
                     for offset in range(int(duration_days)):

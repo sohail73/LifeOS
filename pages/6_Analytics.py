@@ -15,14 +15,14 @@ from database.queries import get_coding_logs_df, get_study_sessions_df
 from utils.helper import format_duration
 from widgets.charts import bar_chart, donut_chart, line_chart, multi_line_chart, study_heatmap
 from database.queries import get_avatar_base64
-from utils.ui import render_sidebar_branding
+from utils.ui import page_header, render_sidebar_branding
 
 st.set_page_config(page_title="Analytics - LifeOS", page_icon="⚡", layout="wide")
 require_login()
 
 user_id = current_user_id()
 render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
-st.title("Analytics")
+page_header("Analytics", eyebrow="Insights")
 
 study_df = get_study_sessions_df(user_id)
 coding_df = get_coding_logs_df(user_id)
