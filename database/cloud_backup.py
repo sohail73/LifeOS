@@ -45,7 +45,7 @@ import requests
 from config.database import DB_PATH
 
 API = "https://api.github.com"
-DEBOUNCE_SECONDS = 60
+DEBOUNCE_SECONDS = 120
 RETRY_SECONDS = 30
 SIDECAR = DB_PATH.parent / ".cloud_backup_sha"  # remote file version this server last synced to
 
@@ -150,9 +150,10 @@ def _remote_download(cfg) -> bytes:
     return r.content
 
 
-def _remote_upload(cfg, data: bytes, sha) -> str:
+def _remote_upload(cfg, data: bytes, sha, note: str = "") -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     payload = {
-        "message": f"LifeOS backup {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC",
+        "message": f"LifeOS backup {stamp} UTC" + (f" (changed: {note})" if note else ""),
         "content": base64.b64encode(data).decode("ascii"),
         "branch": cfg["branch"],
     }
@@ -184,13 +185,12 @@ def _local_has_users() -> bool:
 
 
 def _fingerprint():
-    """Hash of the real data in the DB. Ignores snapshots.created_at, which the
-    app rewrites on every new browser session even when nothing changed.
+    """{table: hash of its rows}, ignoring snapshots.created_at (a refresh stamp).
     Returns None if it can't be computed (then we just upload, to be safe)."""
     try:
         conn = sqlite3.connect(DB_PATH)
         try:
-            digest = hashlib.sha256()
+            result = {}
             tables = [
                 r[0]
                 for r in conn.execute(
@@ -201,15 +201,25 @@ def _fingerprint():
                 cols = [r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')]
                 if table == "snapshots":
                     cols = [c for c in cols if c != "created_at"]
-                digest.update(table.encode())
+                digest = hashlib.sha256()
                 column_sql = ", ".join(f'"{c}"' for c in cols)
                 for row in conn.execute(f'SELECT {column_sql} FROM "{table}" ORDER BY rowid'):
                     digest.update(repr(row).encode())
-            return digest.hexdigest()
+                result[table] = digest.hexdigest()
+            return result
         finally:
             conn.close()
     except Exception:
         return None
+
+
+def _changed_tables(old, new) -> str:
+    if not new:
+        return "unknown"
+    if not old:
+        return "first backup since app start"
+    changed = sorted(t for t in new if new.get(t) != old.get(t))
+    return ", ".join(changed) if changed else "none"
 
 
 def _read_sidecar():
@@ -315,7 +325,8 @@ def backup_now():
             fingerprint = _fingerprint()
             if fingerprint is not None and fingerprint == _state["last_fp"]:
                 return True, "Nothing new to back up -- the cloud copy is already up to date."
-            new_sha = _remote_upload(cfg, data, _remote_sha(cfg))
+            note = _changed_tables(_state["last_fp"], fingerprint)
+            new_sha = _remote_upload(cfg, data, _remote_sha(cfg), note)
             _write_sidecar(new_sha)
             _state["last_fp"] = fingerprint
             _state["last_backup"] = datetime.now(timezone.utc)

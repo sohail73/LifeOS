@@ -329,6 +329,15 @@ def save_snapshot(
                 current_streak = excluded.current_streak,
                 goal_completion = excluded.goal_completion,
                 created_at = CURRENT_TIMESTAMP
+            -- Only rewrite the row when a value really changed. Refreshing an
+            -- identical snapshot on every new session must not count as a
+            -- database change (it would trigger a pointless cloud backup).
+            WHERE snapshots.period_start IS NOT excluded.period_start
+               OR snapshots.period_end IS NOT excluded.period_end
+               OR snapshots.study_hours IS NOT excluded.study_hours
+               OR snapshots.problems_solved IS NOT excluded.problems_solved
+               OR snapshots.current_streak IS NOT excluded.current_streak
+               OR snapshots.goal_completion IS NOT excluded.goal_completion
             """,
             (
                 user_id,
