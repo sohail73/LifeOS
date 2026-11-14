@@ -52,6 +52,7 @@ _lock = threading.RLock()
 _cfg_cache = None
 _state = {
     "checked": False,      # startup check/restore finished OK
+    "restored": False,     # this process restored the DB from the repo
     "blocked": False,      # a backup exists but couldn't be restored -> never upload
     "suspend": False,      # True while we are writing a restored DB
     "timer": None,
@@ -101,9 +102,12 @@ def is_enabled() -> bool:
 def status() -> dict:
     return {
         "enabled": is_enabled(),
+        "checked": _state["checked"],
+        "restored": _state["restored"],
         "blocked": _state["blocked"],
         "last_backup": _state["last_backup"],
         "last_error": _state["last_error"],
+        "accounts": _user_count(),
     }
 
 
@@ -160,17 +164,21 @@ def _remote_upload(cfg, data: bytes, sha) -> str:
 # ---------------------------------------------------------------------------
 # Local helpers
 # ---------------------------------------------------------------------------
-def _local_has_users() -> bool:
+def _user_count() -> int:
     if not DB_PATH.exists():
-        return False
+        return 0
     try:
         conn = sqlite3.connect(DB_PATH)
         try:
-            return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] > 0
+            return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         finally:
             conn.close()
     except sqlite3.Error:
-        return False
+        return 0
+
+
+def _local_has_users() -> bool:
+    return _user_count() > 0
 
 
 def _read_sidecar():
@@ -225,7 +233,7 @@ def restore_if_needed() -> None:
                 raise RuntimeError(message)
 
             _write_sidecar(remote_sha)
-            _state.update(checked=True, blocked=False, last_error=None)
+            _state.update(checked=True, restored=True, blocked=False, last_error=None)
         except Exception as exc:
             _state.update(
                 blocked=True,

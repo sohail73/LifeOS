@@ -79,6 +79,17 @@ def render_logged_out_view() -> None:
     inject_global_css()
 
     backup_status = cloud_backup.status()
+    if not backup_status["enabled"]:
+        server_line = "Cloud backup: OFF (secrets not found on this server)"
+    elif backup_status["blocked"]:
+        server_line = "Cloud backup: ON, but restore FAILED"
+    elif backup_status["restored"]:
+        server_line = "Cloud backup: ON, data restored from your backup"
+    elif backup_status["checked"]:
+        server_line = "Cloud backup: ON, no restore needed (this server's data is already in sync)"
+    else:
+        server_line = "Cloud backup: ON, startup check has not finished"
+    st.caption(f"Server status -- {server_line} -- accounts on this server: {backup_status['accounts']}")
     if backup_status["blocked"]:
         st.error(
             "Your saved data could not be restored right now, so please do NOT create a new account "
