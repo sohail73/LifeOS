@@ -16,6 +16,7 @@ cookie and logs you straight in. Cookies are written by a tiny script
 import streamlit as st
 
 from auth import remember_tokens
+from config import timezone as _timezone  # noqa: F401  (sets the app to IST on import)
 
 COOKIE_NAME = "lifeos_session"
 

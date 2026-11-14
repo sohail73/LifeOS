@@ -11,6 +11,8 @@ on its own. This keeps the database layer swappable later
 import sqlite3
 from pathlib import Path
 
+from config import timezone as _timezone  # noqa: F401  (sets the app to IST on import)
+
 # database/lifeos.db, resolved relative to this file so it works
 # no matter what directory the app is launched from.
 BASE_DIR = Path(__file__).resolve().parent.parent
