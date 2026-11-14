@@ -7,7 +7,7 @@ automatic restore when the hosting platform wipes the app's disk
 
 How it works
 - Every commit that really changes data calls mark_dirty() (see
-  config/database.py). 30 seconds later (debounced, so a burst of
+  config/database.py). about a minute later (debounced, so a burst of
   saves = one upload) the whole database is uploaded to the repo as
   one file. Every upload is a git commit, so GitHub keeps the full
   history of old versions for free.
@@ -33,6 +33,7 @@ Secrets (Streamlit Cloud: App settings > Secrets), or environment vars:
 """
 
 import base64
+import hashlib
 import os
 import sqlite3
 import threading
@@ -44,7 +45,7 @@ import requests
 from config.database import DB_PATH
 
 API = "https://api.github.com"
-DEBOUNCE_SECONDS = 30
+DEBOUNCE_SECONDS = 60
 RETRY_SECONDS = 30
 SIDECAR = DB_PATH.parent / ".cloud_backup_sha"  # remote file version this server last synced to
 
@@ -57,6 +58,7 @@ _state = {
     "suspend": False,      # True while we are writing a restored DB
     "timer": None,
     "next_retry": 0.0,
+    "last_fp": None,       # fingerprint of the data at the last upload/restore
     "last_backup": None,   # datetime (UTC) of last successful upload
     "last_error": None,
 }
@@ -181,6 +183,35 @@ def _local_has_users() -> bool:
     return _user_count() > 0
 
 
+def _fingerprint():
+    """Hash of the real data in the DB. Ignores snapshots.created_at, which the
+    app rewrites on every new browser session even when nothing changed.
+    Returns None if it can't be computed (then we just upload, to be safe)."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            digest = hashlib.sha256()
+            tables = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                )
+            ]
+            for table in tables:
+                cols = [r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')]
+                if table == "snapshots":
+                    cols = [c for c in cols if c != "created_at"]
+                digest.update(table.encode())
+                column_sql = ", ".join(f'"{c}"' for c in cols)
+                for row in conn.execute(f'SELECT {column_sql} FROM "{table}" ORDER BY rowid'):
+                    digest.update(repr(row).encode())
+            return digest.hexdigest()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
 def _read_sidecar():
     try:
         return SIDECAR.read_text().strip() or None
@@ -233,7 +264,7 @@ def restore_if_needed() -> None:
                 raise RuntimeError(message)
 
             _write_sidecar(remote_sha)
-            _state.update(checked=True, restored=True, blocked=False, last_error=None)
+            _state.update(checked=True, restored=True, blocked=False, last_error=None, last_fp=_fingerprint())
         except Exception as exc:
             _state.update(
                 blocked=True,
@@ -281,8 +312,12 @@ def backup_now():
             ok, message = validate_backup(data)
             if not ok:
                 return False, f"Skipped: {message}"
+            fingerprint = _fingerprint()
+            if fingerprint is not None and fingerprint == _state["last_fp"]:
+                return True, "Nothing new to back up -- the cloud copy is already up to date."
             new_sha = _remote_upload(cfg, data, _remote_sha(cfg))
             _write_sidecar(new_sha)
+            _state["last_fp"] = fingerprint
             _state["last_backup"] = datetime.now(timezone.utc)
             _state["last_error"] = None
             return True, "Backup uploaded."
