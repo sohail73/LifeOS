@@ -15,6 +15,7 @@ import streamlit as st
 
 from auth.auth_utils import authenticate_user, create_user
 from auth.session import current_user_id, current_user_name, is_logged_in, login, logout
+from database import cloud_backup
 from database.create_tables import initialize_database
 from database.queries import ensure_default_subjects, get_avatar_base64
 from utils.ui import inject_global_css, page_header, render_sidebar_branding
@@ -76,6 +77,14 @@ def render_signup_form() -> None:
 
 def render_logged_out_view() -> None:
     inject_global_css()
+
+    backup_status = cloud_backup.status()
+    if backup_status["blocked"]:
+        st.error(
+            "Your saved data could not be restored right now, so please do NOT create a new account "
+            "or add data yet. Refresh this page in a minute. "
+            f"Details: {backup_status['last_error']}"
+        )
 
     hero_col, form_col = st.columns([1.25, 1], gap="large")
 

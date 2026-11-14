@@ -427,3 +427,59 @@ def roadmap_step_progress_pct(user_id: int, step: dict) -> float | None:
         total += progress["total_tasks"]
         done += progress["completed_tasks"]
     return round(done / total * 100, 1) if total else None
+
+
+def job_target_progress_pct(user_id: int, job: dict) -> float | None:
+    """
+    Completion % of a job target, from the tasks of the goal(s) linked to it
+    (completed tasks / all tasks across them). Ready and Achieved jobs are
+    always 100. Returns None when nothing measurable is linked, so the board
+    can say "No goal linked" instead of showing a fake 0%.
+    """
+    from analytics.tasks_analytics import goal_progress
+    from database.queries import get_linked_goals_for_job_target, get_tasks_df
+
+    if job["status"] in ("Ready", "Achieved"):
+        return 100.0
+    total = done = 0
+    for goal in get_linked_goals_for_job_target(user_id, job["id"]):
+        progress = goal_progress(goal, get_tasks_df(user_id, goal_id=goal["id"]))
+        total += progress["total_tasks"]
+        done += progress["completed_tasks"]
+    return round(done / total * 100, 1) if total else None
+
+
+def job_role_readiness(user_id: int, role: dict) -> dict:
+    """
+    How ready you are for a job role, worked out from the roadmap steps attached to it:
+
+    * "Ready"       -- every attached step is Ready (this happens by itself as the
+                       steps' goals complete -- nothing to tick on the role).
+    * "In Progress" -- at least one attached step is Ready or In Progress.
+    * "Future"      -- steps are attached but none has been started.
+    * "No steps"    -- nothing attached yet.
+
+    pct is the average completion of the attached steps (a Ready step counts as 100,
+    other steps use their linked goals' progress, or 0 if they have none).
+    Returns {"status", "pct", "ready_count", "total", "steps": [step dicts + progress_pct]}.
+    """
+    from database.queries import get_job_role_steps
+
+    steps = []
+    for step in get_job_role_steps(user_id, role["id"]):
+        pct = roadmap_step_progress_pct(user_id, step)
+        steps.append(dict(step, progress_pct=pct))
+
+    total = len(steps)
+    ready_count = sum(1 for s in steps if s["status"] == "Ready")
+    if total == 0:
+        status = "No steps"
+    elif ready_count == total:
+        status = "Ready"
+    elif any(s["status"] in ("Ready", "In Progress") for s in steps):
+        status = "In Progress"
+    else:
+        status = "Future"
+    pct = round(sum((s["progress_pct"] or 0.0) for s in steps) / total, 1) if total else 0.0
+    return {"status": status, "pct": pct, "ready_count": ready_count, "total": total, "steps": steps}
+

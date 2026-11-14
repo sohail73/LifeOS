@@ -5,3 +5,7 @@ __pycache__/
 .idea/
 database/lifeos.db
 .streamlit/secrets.toml
+
+database/lifeos_before_restore.db
+*.db
+database/.cloud_backup_sha

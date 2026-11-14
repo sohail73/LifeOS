@@ -20,12 +20,14 @@ from database.queries import (
     delete_long_term_goal,
     delete_task,
     extend_goal_end_date,
+    goal_has_completed_tasks,
     get_tasks_df,
     get_tasks_for_goal,
     goal_move_availability,
     move_goal_order,
     reschedule_task,
     set_goal_priority,
+    shift_goal_start_date,
     toggle_task,
     uncomplete_task,
     update_goal_notes,
@@ -56,17 +58,18 @@ def render_goal_card(
     goal_tasks_df = get_tasks_df(user_id, goal_id=goal["id"])
     progress = goal_progress(goal, goal_tasks_df)
     extend_key = f"extend_{context_key}_{goal['id']}"
+    start_key = f"start_{context_key}_{goal['id']}"
     edit_notes_key = f"edit_notes_{context_key}_{goal['id']}"
 
     with st.container(border=True):
         if editable and show_delete:
-            title_col, up_col, down_col, extend_col, delete_col = st.columns([4, 1, 1, 2, 2])
+            title_col, up_col, down_col, start_col, extend_col, delete_col = st.columns([3, 1, 1, 2, 2, 2])
         elif editable:
-            title_col, up_col, down_col, extend_col = st.columns([5, 1, 1, 2])
+            title_col, up_col, down_col, start_col, extend_col = st.columns([4, 1, 1, 2, 2])
             delete_col = None
         else:
             title_col = st.container()
-            up_col = down_col = extend_col = delete_col = None
+            up_col = down_col = start_col = extend_col = delete_col = None
 
         title_col.markdown(f"**🏁 {goal['title']}** &nbsp; {priority_badge(goal.get('priority', 2))}", unsafe_allow_html=True)
         if editable:
@@ -83,6 +86,11 @@ def render_goal_card(
             ):
                 move_goal_order(user_id, goal["id"], "down")
                 st.rerun()
+        if editable and start_col.button(
+            "Change start", key=f"start_btn_{context_key}_{goal['id']}",
+            help="Move the whole goal (and all its tasks) to start on a different date.",
+        ):
+            st.session_state[start_key] = not st.session_state.get(start_key, False)
         if editable and extend_col.button("⏳ Extend", key=f"extend_btn_{context_key}_{goal['id']}"):
             st.session_state[extend_key] = not st.session_state.get(extend_key, False)
         if delete_col is not None and delete_col.button("🗑️ Delete", key=f"del_goal_{context_key}_{goal['id']}"):
@@ -134,6 +142,38 @@ def render_goal_card(
             st.caption("⚠️ Past end date, not fully complete")
         else:
             st.caption(f"{progress['days_remaining']} days remaining")
+
+        if editable and st.session_state.get(start_key):
+            if goal_has_completed_tasks(user_id, goal["id"]):
+                st.info(
+                    "This goal already has completed tasks, so its start date can't be moved. "
+                    "Use Extend for the deadline, or reschedule individual tasks."
+                )
+            else:
+                old_start = date.fromisoformat(goal["start_date"])
+                old_end = date.fromisoformat(goal["end_date"])
+                new_start = st.date_input(
+                    "New start date", value=date.today(),
+                    min_value=date.today(), key=f"new_start_{context_key}_{goal['id']}",
+                )
+                shift = (new_start - old_start).days
+                preview_end = old_end + timedelta(days=shift)
+                st.caption(
+                    f"The whole schedule moves {abs(shift)} day(s) {'earlier' if shift < 0 else 'later'}: "
+                    f"{new_start.isoformat()} → {preview_end.isoformat()}"
+                    if shift else "That's already the start date."
+                )
+                if st.button(
+                    "Confirm New Start Date", key=f"confirm_start_{context_key}_{goal['id']}", disabled=shift == 0
+                ):
+                    try:
+                        shift_goal_start_date(user_id, goal["id"], new_start.isoformat())
+                    except ValueError as error:
+                        st.error(str(error))
+                    else:
+                        del st.session_state[start_key]
+                        st.success(f"Goal now starts on {new_start.strftime('%d %b %Y')}.")
+                        st.rerun()
 
         if editable and st.session_state.get(extend_key):
             current_end = date.fromisoformat(goal["end_date"])

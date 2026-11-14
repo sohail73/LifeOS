@@ -489,6 +489,70 @@ def extend_goal_end_date(user_id: int, goal_id: int, new_end_date: str) -> None:
         conn.close()
 
 
+def goal_has_completed_tasks(user_id: int, goal_id: int) -> bool:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND goal_id = ? AND is_done = 1",
+            (user_id, goal_id),
+        ).fetchone()
+        return row[0] > 0
+    finally:
+        conn.close()
+
+
+def shift_goal_start_date(user_id: int, goal_id: int, new_start_date: str) -> dict:
+    """
+    Moves a whole goal so it starts on new_start_date instead: the goal's
+    start and end dates and every one of its tasks all move by the same
+    number of days, so the schedule keeps its exact shape (e.g. a goal
+    planned to start 3 months from now can be pulled back to start today).
+
+    Only allowed while the goal has no completed task yet -- once you've
+    ticked tasks off, moving the whole schedule would no longer line up with
+    the days you actually did them (use Extend / reschedule a task instead).
+    Raises ValueError with a readable message otherwise.
+    Returns {"shift_days": int, "new_end_date": "YYYY-MM-DD"}.
+    """
+    from datetime import date, timedelta
+
+    conn = get_connection()
+    try:
+        goal = conn.execute(
+            "SELECT start_date, end_date FROM long_term_goals WHERE user_id = ? AND id = ?",
+            (user_id, goal_id),
+        ).fetchone()
+        if goal is None:
+            raise ValueError("Goal not found.")
+        done = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND goal_id = ? AND is_done = 1",
+            (user_id, goal_id),
+        ).fetchone()[0]
+        if done:
+            raise ValueError(
+                "This goal already has completed tasks, so its start date can't be moved. "
+                "Use Extend for the deadline, or reschedule individual tasks."
+            )
+
+        old_start = date.fromisoformat(goal["start_date"])
+        old_end = date.fromisoformat(goal["end_date"])
+        shift_days = (date.fromisoformat(new_start_date) - old_start).days
+        new_end = old_end + timedelta(days=shift_days)
+        if shift_days != 0:
+            conn.execute(
+                "UPDATE long_term_goals SET start_date = ?, end_date = ? WHERE user_id = ? AND id = ?",
+                (new_start_date, new_end.isoformat(), user_id, goal_id),
+            )
+            conn.execute(
+                "UPDATE tasks SET task_date = date(task_date, ?) WHERE user_id = ? AND goal_id = ?",
+                (f"{shift_days:+d} days", user_id, goal_id),
+            )
+            conn.commit()
+        return {"shift_days": shift_days, "new_end_date": new_end.isoformat()}
+    finally:
+        conn.close()
+
+
 def update_goal_notes(user_id: int, goal_id: int, notes: str) -> None:
     """Add or edit a goal's description/notes after it's already been created."""
     conn = get_connection()
@@ -851,6 +915,8 @@ def reset_user_data(user_id: int) -> None:
         conn.execute("DELETE FROM projects WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM future_topics WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM known_skills WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM leave_days WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM calendar_events WHERE user_id = ?", (user_id,))
         conn.execute(
             "UPDATE goals SET daily_study_minutes_goal = 60, daily_problems_goal = 2, "
             "updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
@@ -1915,6 +1981,255 @@ def delete_gym_session(user_id: int, session_id: int) -> None:
     try:
         conn.execute("DELETE FROM gym_sessions WHERE user_id = ? AND id = ?", (user_id, session_id))
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Leave days (streak freeze: days you were away -- never break a streak,
+# shown in blue on the streak heatmaps)
+# ---------------------------------------------------------------------------
+
+def add_leave_days(user_id: int, start_date: str, end_date: str, reason: str = "") -> int:
+    """Mark every day from start_date to end_date (inclusive, ISO strings)
+    as leave. Days already marked are left alone. Returns how many new
+    days were added."""
+    from datetime import date as _date, timedelta as _td
+
+    start = _date.fromisoformat(start_date)
+    end = _date.fromisoformat(end_date)
+    if end < start:
+        start, end = end, start
+
+    added = 0
+    conn = get_connection()
+    try:
+        day = start
+        while day <= end:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO leave_days (user_id, leave_date, reason) VALUES (?, ?, ?)",
+                (user_id, day.isoformat(), reason.strip() if reason else None),
+            )
+            added += cursor.rowcount
+            day += _td(days=1)
+        conn.commit()
+        return added
+    finally:
+        conn.close()
+
+
+def get_leave_days(user_id: int) -> list:
+    """Most-recent-first list of leave days, for display/removal in the UI."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, leave_date, reason FROM leave_days WHERE user_id = ? ORDER BY leave_date DESC",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_leave_dates(user_id: int) -> set:
+    """Set of datetime.date objects the user marked as leave."""
+    from datetime import date as _date
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT leave_date FROM leave_days WHERE user_id = ?", (user_id,)
+        ).fetchall()
+        return {_date.fromisoformat(r["leave_date"]) for r in rows}
+    finally:
+        conn.close()
+
+
+def delete_leave_day(user_id: int, leave_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM leave_days WHERE user_id = ? AND id = ?", (user_id, leave_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Calendar events (internships, interviews, exams, deadlines... on the
+# Calendar page)
+# ---------------------------------------------------------------------------
+
+def add_calendar_event(
+    user_id: int,
+    title: str,
+    category: str,
+    start_date: str,
+    end_date: str,
+    company: str = "",
+    notes: str = "",
+) -> int:
+    if end_date < start_date:
+        start_date, end_date = end_date, start_date
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO calendar_events (user_id, title, category, company, start_date, end_date, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id, title.strip(), category, company.strip() or None,
+                start_date, end_date, notes.strip() or None,
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_calendar_events(user_id: int) -> list:
+    """All of a user's calendar events, soonest start first."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, title, category, company, start_date, end_date, notes "
+            "FROM calendar_events WHERE user_id = ? ORDER BY start_date, id",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_calendar_event(
+    user_id: int,
+    event_id: int,
+    title: str,
+    category: str,
+    start_date: str,
+    end_date: str,
+    company: str = "",
+    notes: str = "",
+) -> None:
+    if end_date < start_date:
+        start_date, end_date = end_date, start_date
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE calendar_events
+            SET title = ?, category = ?, company = ?, start_date = ?, end_date = ?, notes = ?
+            WHERE user_id = ? AND id = ?
+            """,
+            (
+                title.strip(), category, company.strip() or None, start_date, end_date,
+                notes.strip() or None, user_id, event_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_calendar_event(user_id: int, event_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM calendar_events WHERE user_id = ? AND id = ?", (user_id, event_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Job roles (a role you're building toward, ready once its attached roadmap
+# steps are all Ready -- see analytics/goal_maintenance.job_role_readiness)
+# ---------------------------------------------------------------------------
+
+def add_job_role(user_id: int, title: str, notes: str = "") -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO job_roles (user_id, title, notes) VALUES (?, ?, ?)",
+            (user_id, title.strip(), notes.strip() if notes else None),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_job_roles(user_id: int) -> list:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, title, notes, created_at FROM job_roles WHERE user_id = ? ORDER BY created_at, id",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_job_role(user_id: int, role_id: int, title: str, notes: str) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE job_roles SET title = ?, notes = ? WHERE user_id = ? AND id = ?",
+            (title.strip(), notes.strip() if notes else None, user_id, role_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_job_role(user_id: int, role_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM job_roles WHERE user_id = ? AND id = ?", (user_id, role_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_job_role_steps(user_id: int, role_id: int, step_ids: list) -> None:
+    """Replace the set of roadmap steps attached to a role. Only steps and roles
+    that belong to this user are accepted; anything else is silently ignored."""
+    conn = get_connection()
+    try:
+        owns_role = conn.execute(
+            "SELECT 1 FROM job_roles WHERE id = ? AND user_id = ?", (role_id, user_id)
+        ).fetchone()
+        if owns_role is None:
+            return
+        conn.execute("DELETE FROM job_role_steps WHERE role_id = ?", (role_id,))
+        for step_id in dict.fromkeys(step_ids):  # de-duplicate, keep order
+            conn.execute(
+                "INSERT OR IGNORE INTO job_role_steps (role_id, step_id) "
+                "SELECT ?, id FROM roadmap_steps WHERE id = ? AND user_id = ?",
+                (role_id, step_id, user_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_job_role_steps(user_id: int, role_id: int) -> list:
+    """The roadmap steps attached to a role, in roadmap order (track, then step number)."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.id, s.title, s.status, s.lane, s.order_index
+            FROM job_role_steps jr
+            JOIN roadmap_steps s ON s.id = jr.step_id
+            JOIN job_roles r ON r.id = jr.role_id
+            WHERE jr.role_id = ? AND r.user_id = ?
+            ORDER BY s.lane, s.order_index, s.id
+            """,
+            (role_id, user_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

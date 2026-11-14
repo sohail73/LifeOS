@@ -19,10 +19,13 @@ from analytics.insights import generate_weekly_summary
 from analytics.tasks_analytics import goal_progress
 from auth.session import current_user_name, require_login, current_user_id
 from database.queries import (
+    add_leave_days,
+    delete_leave_day,
     get_avatar_base64,
     get_coding_logs_df,
     get_custom_quote,
     get_goals,
+    get_leave_days,
     get_long_term_goals,
     get_pinned_job_target,
     get_projects,
@@ -259,6 +262,48 @@ if not study_df.empty or not coding_df.empty:
         activity_heatmap(activity_df, title="Activity -- Last 6 Months"),
         use_container_width=True,
     )
+
+    # --- Leave days: away / couldn't log -> streak stays safe, cell turns blue ---
+    with st.expander("🔵 Mark leave / away days (keeps your streak safe)"):
+        st.caption(
+            "Travelling, unwell, or just couldn't log? Mark those days here -- they show up "
+            "in blue on the streak charts and never break your streak. You can mark past days "
+            "(to fix a streak that broke by mistake) or upcoming ones."
+        )
+        with st.form("leave_form", clear_on_submit=True):
+            leave_range = st.date_input(
+                "Day or date range",
+                value=(today, today),
+                help="Pick one day, or click a start and an end date for several days.",
+            )
+            leave_reason = st.text_input("Reason (optional)", placeholder="e.g. Out of station")
+            leave_submitted = st.form_submit_button("Save leave", use_container_width=True)
+
+        if leave_submitted:
+            if isinstance(leave_range, (tuple, list)):
+                picked = list(leave_range)
+            else:
+                picked = [leave_range]
+            if not picked:
+                st.warning("Pick a date first.")
+            else:
+                leave_start, leave_end = picked[0], picked[-1]
+                added = add_leave_days(user_id, leave_start.isoformat(), leave_end.isoformat(), leave_reason)
+                st.success(f"Marked {added} day(s) as leave." if added else "Those days were already marked as leave.")
+                st.rerun()
+
+        leave_rows = get_leave_days(user_id)
+        if leave_rows:
+            st.markdown("**Your leave days**")
+            for row in leave_rows[:15]:
+                lcol1, lcol2 = st.columns([5, 1])
+                label = date.fromisoformat(row["leave_date"]).strftime("%d %b %Y")
+                lcol1.write(f"{label}" + (f" · {row['reason']}" if row["reason"] else ""))
+                if lcol2.button("Remove", key=f"leave_del_{row['id']}"):
+                    delete_leave_day(user_id, row["id"])
+                    st.rerun()
+            if len(leave_rows) > 15:
+                st.caption(f"Showing the latest 15 of {len(leave_rows)} leave days.")
 
 # ---------------------------------------------------------------------------
 # Upcoming deadlines -- goals ending within 3 days and not yet complete

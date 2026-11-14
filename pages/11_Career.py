@@ -1,7 +1,7 @@
 """
 pages/11_Career.py
 
-Career planning, in five parts:
+Career planning, in six parts:
 
 1. Roadmap -- your learning path as a flowchart: a sequence of steps
    (e.g. Data Science, then DL, then MLOps, then Cloud Computing,
@@ -9,12 +9,16 @@ Career planning, in five parts:
    (running) / Future (not started), reorderable, and linkable to a
    goal -- once that goal hits 100%, the step auto-promotes to Ready.
 
-2. Reward Ladder -- a personal "once I reach X, I'll do/get Y" list,
+2. Job Roles -- the jobs you want to be ready for (Data Scientist, AI Engineer...).
+   Attach the roadmap steps each role needs; the role turns "Ready" on its own
+   once all of its steps are Ready, drawn as a flow: steps -> role.
+
+3. Reward Ladder -- a personal "once I reach X, I'll do/get Y" list,
    e.g. milestone salary figures paired with what you'll do once you
    hit them. Sorted by the milestone's numeric value where given, so
    it reads top to bottom as a ladder.
 
-3. Job Targets -- which job(s) you're aiming for: Ready (you're
+4. Job Targets -- which job(s) you're aiming for: Ready (you're
    qualified now), In Progress (actively working toward it -- link
    one or more long-term goals; once every linked goal hits 100%, it
    auto-promotes to Ready), Future (something you'll go for later),
@@ -22,9 +26,9 @@ Career planning, in five parts:
    30 Jan") to see a countdown, and mark it Achieved any time --
    before or after the deadline -- once you land it.
 
-4. Notes -- a free-form career scratchpad.
+5. Notes -- a free-form career scratchpad.
 
-5. Future Topics -- a "someday/maybe" study wishlist (moved here from
+6. Future Topics -- a "someday/maybe" study wishlist (moved here from
    the Study page, since it's really about what's next for your
    career/learning rather than day-to-day studying).
 """
@@ -37,6 +41,8 @@ from analytics.goal_maintenance import (
     auto_advance_roadmap_lanes,
     auto_promote_ready_jobs,
     auto_promote_ready_roadmap_steps,
+    job_role_readiness,
+    job_target_progress_pct,
     roadmap_step_progress_pct,
 )
 from analytics.tasks_analytics import goal_progress
@@ -45,17 +51,20 @@ from config.constants import JOB_TARGET_STATUSES, ROADMAP_STEP_STATUSES
 from database.queries import (
     add_career_note,
     add_future_topic,
+    add_job_role,
     add_job_target,
     add_reward_milestone,
     add_roadmap_step,
     delete_career_note,
     delete_future_topic,
+    delete_job_role,
     delete_job_target,
     delete_reward_milestone,
     delete_roadmap_step,
     get_avatar_base64,
     get_career_notes,
     get_future_topics,
+    get_job_roles,
     get_job_targets,
     get_linked_goals_for_job_target,
     get_linked_goals_for_roadmap_step,
@@ -67,17 +76,29 @@ from database.queries import (
     link_roadmap_step_goal,
     mark_job_target_achieved,
     move_roadmap_step,
+    set_job_role_steps,
     set_job_target_pinned,
     toggle_career_note,
     toggle_reward_milestone,
     unlink_job_target_goal,
     unlink_roadmap_step_goal,
     update_career_note,
+    update_job_role,
     update_job_target,
     update_reward_milestone,
     update_roadmap_step,
 )
-from utils.ui import page_header, progress_bar_html, render_sidebar_branding, roadmap_flowchart_html, status_badge
+from utils.ui import (
+    job_board_html,
+    job_roles_flow_html,
+    kpi_card_row,
+    page_header,
+    progress_bar_html,
+    render_sidebar_branding,
+    reward_ladder_html,
+    roadmap_flowchart_html,
+    status_badge,
+)
 
 st.set_page_config(page_title="Career - LifeOS", page_icon="⚡", layout="wide")
 require_login()
@@ -91,8 +112,8 @@ promoted_jobs = auto_promote_ready_jobs(user_id)
 for title in promoted_jobs:
     st.toast(f"'{title}' is complete -- moved to Ready!")
 
-roadmap_tab, rewards_tab, jobs_tab, notes_tab, future_topics_tab = st.tabs(
-    ["Roadmap", "Reward Ladder", "Job Targets", "Notes", "Future Topics"]
+roadmap_tab, roles_tab, rewards_tab, jobs_tab, notes_tab, future_topics_tab = st.tabs(
+    ["Roadmap", "Job Roles", "Reward Ladder", "Job Targets", "Notes", "Future Topics"]
 )
 
 # ---------------------------------------------------------------------------
@@ -264,6 +285,100 @@ with roadmap_tab:
             st.rerun()
 
 # ---------------------------------------------------------------------------
+# Job roles -- roles you want to be ready for, built from roadmap steps
+# ---------------------------------------------------------------------------
+with roles_tab:
+    st.subheader("Job Roles")
+    st.caption(
+        "The jobs you want to be ready for -- Data Scientist, AI Engineer, whatever you like. Attach the "
+        "roadmap steps each role needs. You don't tick anything: once every attached step is Ready, the "
+        "role turns Ready by itself. A step can feed several roles (Python helps both)."
+    )
+
+    # (the roadmap tab above already promoted any finished steps, so this reads fresh statuses)
+    roadmap_steps_now = get_roadmap_steps(user_id)
+    step_labels = {x["id"]: f"Track {x['lane']} · Step {x['order_index']}: {x['title']}" for x in roadmap_steps_now}
+    step_ids = list(step_labels.keys())
+    roles = get_job_roles(user_id)
+
+    if not roadmap_steps_now:
+        st.info("Add some steps on the Roadmap tab first -- then you can attach them to your job roles here.")
+
+    if not roles:
+        st.info("No job roles yet. Add your first one below.")
+    else:
+        role_data = [dict(r, **job_role_readiness(user_id, r)) for r in roles]
+        kpi_card_row([
+            {"label": "Job roles", "value": len(role_data), "color": "indigo"},
+            {"label": "Ready", "value": sum(1 for r in role_data if r["status"] == "Ready"), "color": "green"},
+            {"label": "In Progress", "value": sum(1 for r in role_data if r["status"] == "In Progress"), "color": "teal"},
+        ])
+        job_roles_flow_html(role_data)
+
+        st.divider()
+        st.markdown("**Manage job roles**")
+        for role in role_data:
+            edit_key = f"editing_role_{role['id']}"
+            with st.container(border=True):
+                title_col, status_col, edit_col, delete_col = st.columns([3, 2, 1, 1])
+                title_col.markdown(f"**{role['title']}**")
+                status_col.markdown(status_badge(role["status"]), unsafe_allow_html=True)
+                if edit_col.button("Edit", key=f"edit_role_btn_{role['id']}"):
+                    st.session_state[edit_key] = not st.session_state.get(edit_key, False)
+                if delete_col.button("Delete", key=f"del_role_{role['id']}"):
+                    delete_job_role(user_id, role["id"])
+                    st.rerun()
+
+                if role["notes"]:
+                    st.write(role["notes"])
+                if role["total"]:
+                    st.caption(f"{role['ready_count']} of {role['total']} steps ready · {role['pct']:.0f}% there")
+
+                attached_ids = [x["id"] for x in role["steps"]]
+                chosen = st.multiselect(
+                    "Roadmap steps this role needs", step_ids, default=attached_ids,
+                    format_func=lambda sid: step_labels.get(sid, str(sid)), key=f"role_steps_{role['id']}",
+                    disabled=not step_ids,
+                )
+                if st.button("Save steps", key=f"save_role_steps_{role['id']}", disabled=set(chosen) == set(attached_ids)):
+                    set_job_role_steps(user_id, role["id"], chosen)
+                    st.rerun()
+
+                if st.session_state.get(edit_key):
+                    with st.form(f"edit_role_form_{role['id']}"):
+                        e_title = st.text_input("Role", value=role["title"])
+                        e_notes = st.text_area("Notes", value=role["notes"] or "")
+                        save_edit = st.form_submit_button("Save Changes", use_container_width=True)
+                    if save_edit:
+                        if not e_title.strip():
+                            st.error("Role can't be empty.")
+                        else:
+                            update_job_role(user_id, role["id"], e_title, e_notes)
+                            del st.session_state[edit_key]
+                            st.success("Role updated.")
+                            st.rerun()
+
+    st.divider()
+    st.subheader("Add a Job Role")
+    with st.form("add_role_form"):
+        r_title = st.text_input("Role", placeholder="e.g. Data Scientist / AI Engineer / Backend Developer")
+        r_steps = st.multiselect(
+            "Roadmap steps this role needs (optional -- you can attach them later)", step_ids,
+            format_func=lambda sid: step_labels.get(sid, str(sid)), disabled=not step_ids,
+        )
+        r_notes = st.text_area("Notes (optional)")
+        r_submitted = st.form_submit_button("Add Role", use_container_width=True)
+    if r_submitted:
+        if not r_title.strip():
+            st.error("Role can't be empty.")
+        else:
+            new_role_id = add_job_role(user_id, r_title, r_notes)
+            if r_steps:
+                set_job_role_steps(user_id, new_role_id, r_steps)
+            st.success(f"Added: {r_title.strip()}")
+            st.rerun()
+
+# ---------------------------------------------------------------------------
 # Reward ladder
 # ---------------------------------------------------------------------------
 with rewards_tab:
@@ -278,6 +393,18 @@ with rewards_tab:
     if not rewards:
         st.info("Nothing here yet. Add your first milestone below.")
     else:
+        unlocked = sum(1 for r in rewards if r["is_achieved"])
+        next_reward = next((r for r in rewards if not r["is_achieved"]), None)
+        progress_bar_html(round(unlocked / len(rewards) * 100, 1), label=f"{unlocked} of {len(rewards)} rewards unlocked")
+        if next_reward:
+            st.markdown(f"**Next up:** {next_reward['milestone_label']} &rarr; {next_reward['reward_description']}",
+                        unsafe_allow_html=True)
+        else:
+            st.success("Every reward on the ladder is unlocked.")
+        reward_ladder_html(rewards)
+
+        st.divider()
+        st.markdown("**Manage milestones** -- tick the box when you've reached one")
         for r in rewards:
             edit_key = f"editing_reward_{r['id']}"
             with st.container(border=True):
@@ -383,6 +510,31 @@ with jobs_tab:
     if not jobs:
         st.info("Nothing here yet. Add your first job target below.")
     else:
+        board_jobs = [dict(j, progress_pct=job_target_progress_pct(user_id, j)) for j in jobs]
+        today_ = date.today()
+        open_jobs = [j for j in jobs if j["status"] != "Achieved" and j["deadline"]]
+        upcoming = sorted((j for j in open_jobs if date.fromisoformat(j["deadline"]) >= today_), key=lambda j: j["deadline"])
+        overdue_count = sum(1 for j in open_jobs if date.fromisoformat(j["deadline"]) < today_)
+        next_job = upcoming[0] if upcoming else None
+        next_days = (date.fromisoformat(next_job["deadline"]) - today_).days if next_job else None
+        deadline_sub = next_job["title"] if next_job else ("no upcoming deadlines" if open_jobs else "no deadlines set")
+        if overdue_count:
+            deadline_sub += f" -- {overdue_count} overdue"
+        kpi_card_row([
+            {"label": "In Progress", "value": sum(1 for j in jobs if j["status"] == "In Progress"), "color": "indigo"},
+            {"label": "Ready", "value": sum(1 for j in jobs if j["status"] == "Ready"), "color": "green"},
+            {"label": "Achieved", "value": sum(1 for j in jobs if j["status"] == "Achieved"), "color": "green"},
+            {
+                "label": "Next deadline",
+                "value": f"{next_days}d" if next_job else "--",
+                "sub": deadline_sub,
+                "color": "amber" if overdue_count or (next_job and next_days <= 30) else "teal",
+            },
+        ])
+        job_board_html(board_jobs)
+
+        st.divider()
+        st.markdown("**Manage job targets**")
         status_filter = st.selectbox("Filter by status", ["All"] + JOB_TARGET_STATUSES, key="job_status_filter")
         visible_jobs = jobs if status_filter == "All" else [j for j in jobs if j["status"] == status_filter]
 

@@ -452,10 +452,98 @@ def create_gym_sessions_table(conn) -> None:
     )
 
 
+def create_job_roles_table(conn) -> None:
+    # A job role you're building toward ("Data Scientist", "AI Engineer"). It has no
+    # status of its own: it is "ready" automatically once every roadmap step attached
+    # to it (job_role_steps below) is Ready.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def create_job_role_steps_table(conn) -> None:
+    # Many-to-many: which roadmap steps a job role needs. One step can feed several
+    # roles (e.g. "Python" counts toward both Data Scientist and AI Engineer).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_role_steps (
+            role_id INTEGER NOT NULL,
+            step_id INTEGER NOT NULL,
+            PRIMARY KEY (role_id, step_id),
+            FOREIGN KEY (role_id) REFERENCES job_roles (id) ON DELETE CASCADE,
+            FOREIGN KEY (step_id) REFERENCES roadmap_steps (id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def create_leave_days_table(conn) -> None:
+    # Days the user was away / couldn't log anything (travel, sick, family
+    # function...). A leave day never breaks a streak and is drawn in blue
+    # on the streak heatmaps. Purely additive -- no existing table changes.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS leave_days (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            leave_date TEXT NOT NULL,
+            reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+            UNIQUE (user_id, leave_date)
+        )
+        """
+    )
+
+
+def create_calendar_events_table(conn) -> None:
+    # Things the user wants on their calendar: internships, interviews,
+    # applications, exams, hackathons, deadlines... A one-day event has
+    # end_date = start_date; a multi-day one (e.g. a 2-month internship)
+    # spans start_date..end_date. Purely additive -- no existing table changes.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS calendar_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'Other',
+            company TEXT,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_calendar_events_user_start "
+        "ON calendar_events (user_id, start_date)"
+    )
+
+
 def initialize_database() -> None:
     """Create the database file (if needed), all current tables, and
     apply any column migrations needed for databases created by an
-    earlier version of LifeOS."""
+    earlier version of LifeOS.
+
+    If cloud backup is configured (hosted app), the last backup is
+    restored first when this server's disk was wiped -- see
+    database/cloud_backup.py. On localhost this does nothing."""
+    from database import cloud_backup
+
+    cloud_backup.restore_if_needed()
+
     conn = get_connection()
     try:
         create_users_table(conn)
@@ -479,7 +567,11 @@ def initialize_database() -> None:
         create_career_notes_table(conn)
         create_roadmap_steps_table(conn)
         create_roadmap_step_goals_table(conn)
+        create_job_roles_table(conn)
+        create_job_role_steps_table(conn)
         create_gym_sessions_table(conn)
+        create_leave_days_table(conn)
+        create_calendar_events_table(conn)
         _run_migrations(conn)
         conn.commit()
     finally:
@@ -574,5 +666,5 @@ if __name__ == "__main__":
         "snapshots, long_term_goals, tasks, languages, projects, future_topics, "
         "known_skills, project_goals, project_future_topics, career_milestones, "
         "reward_milestones, job_targets, job_target_goals, career_notes, "
-        "roadmap_steps, roadmap_step_goals, gym_sessions"
+        "roadmap_steps, roadmap_step_goals, gym_sessions, job_roles, job_role_steps"
     )

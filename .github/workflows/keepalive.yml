@@ -1,0 +1,20 @@
+name: Keep LifeOS awake
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # every 6 hours (Streamlit sleeps apps after 12h without visitors)
+  workflow_dispatch:         # lets you run it by hand from the Actions tab
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install playwright && playwright install --with-deps chromium
+      - run: python .github/scripts/keepalive.py
+        env:
+          APP_URL: ${{ secrets.APP_URL }}

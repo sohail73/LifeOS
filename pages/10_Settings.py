@@ -16,6 +16,9 @@ from auth.auth_utils import authenticate_user, change_password
 from auth.session import current_user_email, current_user_id, current_user_name, logout, require_login
 from database.queries import get_custom_quote, get_goals, reset_user_data, set_avatar_base64, set_custom_quote, update_goals
 from database.queries import get_avatar_base64
+from database import cloud_backup
+from database.backup_tools import is_owner, make_backup_bytes, restore_from_bytes, validate_backup
+from database.create_tables import initialize_database
 from utils.ui import page_header, avatar_img_tag, duration_input, render_sidebar_branding
 
 st.set_page_config(page_title="Settings - LifeOS", page_icon="⚙️", layout="centered")
@@ -152,6 +155,77 @@ with st.expander("Reset my account data"):
                 st.rerun()
 
 st.divider()
+
+# ---------------------------------------------------------------------------
+# Backup & Restore -- owner only (the database holds every account's data)
+# ---------------------------------------------------------------------------
+if is_owner(user_id, current_user_email()):
+    st.subheader("Backup & Restore")
+    st.caption(
+        "Download a copy of the whole LifeOS database (all accounts) and keep it somewhere safe. "
+        "If the hosted app ever resets, you can restore from it here."
+    )
+
+    from datetime import datetime
+
+    cloud = cloud_backup.status()
+    if cloud["enabled"]:
+        if cloud["blocked"]:
+            st.error(f"Automatic cloud backup is PAUSED. {cloud['last_error']}")
+        elif cloud["last_error"]:
+            st.warning(cloud["last_error"])
+        elif cloud["last_backup"]:
+            st.success(
+                "Automatic cloud backup is ON. Last backup: "
+                + cloud["last_backup"].strftime("%d %b %Y, %H:%M UTC")
+            )
+        else:
+            st.info("Automatic cloud backup is ON. It runs about 30 seconds after your next change.")
+        if st.button("Back up to cloud now", use_container_width=True):
+            done, done_msg = cloud_backup.backup_now()
+            (st.success if done else st.error)(done_msg)
+    else:
+        st.caption("Automatic cloud backup is off (not configured on this server).")
+
+    st.download_button(
+        "Download backup (.db)",
+        data=make_backup_bytes(),
+        file_name=f"lifeos_backup_{datetime.now().strftime('%Y-%m-%d_%H%M')}.db",
+        mime="application/octet-stream",
+        use_container_width=True,
+    )
+
+    with st.expander("Restore from a backup file"):
+        st.warning(
+            "This replaces ALL current data (every account) with the contents of the backup. "
+            "A safety copy of the current data is kept on the server first."
+        )
+        backup_file = st.file_uploader("Backup file (.db)", type=["db"], key="restore_uploader")
+        if backup_file is not None:
+            backup_bytes = backup_file.getvalue()
+            valid, valid_msg = validate_backup(backup_bytes)
+            if valid:
+                st.info(valid_msg)
+            else:
+                st.error(valid_msg)
+
+            if valid:
+                restore_confirm = st.checkbox("I understand this replaces all current data.", key="restore_confirm")
+                restore_password = st.text_input("Your password", type="password", key="restore_password")
+                if st.button("Restore now", use_container_width=True):
+                    if not restore_confirm:
+                        st.error("Please check the confirmation box.")
+                    elif authenticate_user(current_user_email(), restore_password) is None:
+                        st.error("Incorrect password. Nothing was changed.")
+                    else:
+                        done, done_msg = restore_from_bytes(backup_bytes)
+                        if done:
+                            initialize_database()  # apply migrations if the backup is from an older version
+                            st.success(done_msg + " Please log in again.")
+                            logout()
+                            st.rerun()
+                        else:
+                            st.error(done_msg)
 
 if st.button("Log Out"):
     logout()

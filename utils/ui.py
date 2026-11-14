@@ -75,14 +75,18 @@ hr { border-color: __BORDER__ !important; }
 }
 
 /* ---------- cards ---------- */
-div[data-testid="stVerticalBlockBorderWrapper"] {
+/* st.container(border=True): older Streamlit used stVerticalBlockBorderWrapper, newer (1.5x+) draws the
+   border on a stVerticalBlock that carries data-test-scroll-behavior -- style both. */
+div[data-testid="stVerticalBlockBorderWrapper"],
+div[data-testid="stVerticalBlock"][data-test-scroll-behavior] {
     border-radius: 16px !important;
     border: 1px solid __BORDER__ !important;
     background: __CARD_BG__;
     box-shadow: 0 1px 2px rgba(20,20,31,0.04), 0 8px 22px rgba(101,88,224,0.06);
     transition: box-shadow 0.18s ease, border-color 0.18s ease;
 }
-div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+div[data-testid="stVerticalBlockBorderWrapper"]:hover,
+div[data-testid="stVerticalBlock"][data-test-scroll-behavior]:hover {
     border-color: #D9D4F6 !important;
     box-shadow: 0 1px 2px rgba(20,20,31,0.05), 0 12px 28px rgba(101,88,224,0.10);
 }
@@ -531,6 +535,315 @@ def roadmap_flowchart_html(steps: list[dict]) -> None:
         + "".join(body) + "</div>"
     )
     components.html(doc, height=total_h, scrolling=True)
+
+
+_LADDER_CSS = """
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: __INK__; }
+svg { position: absolute; left: 0; top: 0; overflow: visible; }
+.rung { position: absolute; width: __W__px; height: __H__px; display: flex; align-items: center; gap: 14px;
+        padding: 0 16px; border-radius: 16px; border: 2px solid __BORDER__; background: #fff; }
+.rung.ach { border-color: __GREEN__; background: __MINT__; }
+.rung.next { border-color: __ACCENT__; background: __SOFT__; box-shadow: 0 0 0 4px rgba(101,88,224,.16); }
+.rung.lock { opacity: .9; }
+.dot { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+       font-family: "Space Grotesk", sans-serif; font-weight: 700; font-size: 15px; border: 2px solid __BORDER__; color: __MUTED__; background: #fff; }
+.ach .dot { background: __GREEN__; border-color: __GREEN__; color: #fff; }
+.next .dot { background: __ACCENT__; border-color: __ACCENT__; color: #fff; }
+.txt { flex: 1; min-width: 0; }
+.ms { font-family: "Space Mono", monospace; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: __MUTED__; }
+.rw { font-family: "Space Grotesk", "Inter", sans-serif; font-size: 18px; font-weight: 700; line-height: 1.2; margin-top: 3px;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tag { flex: 0 0 auto; font-family: "Space Mono", monospace; font-size: 10px; font-weight: 700; letter-spacing: .1em;
+       text-transform: uppercase; padding: 4px 10px; border-radius: 999px; background: #F1F0F7; color: __MUTED__; }
+.ach .tag { background: #fff; color: #1F8A5B; } .next .tag { background: __ACCENT__; color: #fff; }
+"""
+
+
+def reward_ladder_html(rewards: list[dict]) -> None:
+    """
+    The reward ladder drawn as a staircase read from the top: milestone 1 (the lowest)
+    at the top-left, then 2, 3, 4... each one step further down and to the right,
+    joined by a path. Unlocked rewards are green, the very next one is highlighted,
+    the rest are locked. `rewards` must already be in ascending order (lowest first). Each:
+    {"milestone_label": "10 LPA job", "reward_description": "Buy Abbu an iPhone",
+    "is_achieved": 0/1, "notes": optional}.
+    """
+    import html as html_lib
+
+    W, H, GAP, OFFSET, PAD = 540, 88, 22, 38, 10
+    n = len(rewards)
+    next_index = next((i for i, r in enumerate(rewards) if not r["is_achieved"]), None)
+    total_w = PAD * 2 + W + OFFSET * (n - 1)
+    total_h = PAD * 2 + n * H + (n - 1) * GAP
+
+    paths, cards = [], []
+    for k, reward in enumerate(rewards):
+        x = PAD + k * OFFSET
+        y = PAD + k * (H + GAP)
+        state = "ach" if reward["is_achieved"] else ("next" if k == next_index else "lock")
+        tag = {"ach": "Unlocked", "next": "Next up", "lock": "Locked"}[state]
+        dot = "&#10003;" if state == "ach" else str(k + 1)
+        tip = html_lib.escape(reward.get("notes") or "")
+        cards.append(
+            f'<div class="rung {state}" title="{tip}" style="left:{x}px;top:{y}px">'
+            f'<div class="dot">{dot}</div>'
+            f'<div class="txt"><div class="ms">{html_lib.escape(reward["milestone_label"])}</div>'
+            f'<div class="rw">{html_lib.escape(reward["reward_description"])}</div></div>'
+            f'<div class="tag">{tag}</div></div>'
+        )
+        if k < n - 1:  # the stair connecting this step to the next one down
+            x1, x2 = x + 33, PAD + (k + 1) * OFFSET + 33
+            colour = _GREEN if reward["is_achieved"] else "#C9C4EC"
+            dash = "" if reward["is_achieved"] else ' stroke-dasharray="5 5"'
+            paths.append(
+                f'<path d="M{x1} {y + H} V{y + H + GAP / 2} H{x2} V{y + H + GAP}" fill="none" stroke="{colour}" '
+                f'stroke-width="3" stroke-linecap="round"{dash}/>'
+            )
+
+    css = (
+        _LADDER_CSS.replace("__INK__", _INK).replace("__MUTED__", _MUTED).replace("__BORDER__", _CARD_BORDER)
+        .replace("__GREEN__", _GREEN).replace("__MINT__", _MINT).replace("__ACCENT__", _ACCENT)
+        .replace("__SOFT__", _ACCENT_SOFT).replace("__W__", str(W)).replace("__H__", str(H))
+    )
+    doc = (
+        f"<style>@import url('{_FONT_IMPORT}');{css}</style>"
+        f'<div style="position:relative;width:{total_w}px;height:{total_h}px">'
+        f'<svg width="{total_w}" height="{total_h}">{"".join(paths)}</svg>{"".join(cards)}</div>'
+    )
+    components.html(doc, height=total_h + 18, scrolling=True)
+
+
+_ROLES_CSS = """
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: __INK__; }
+svg { position: absolute; left: 0; top: 0; overflow: visible; }
+.step { position: absolute; width: __SW__px; height: __SH__px; padding: 8px 12px; border-radius: 12px; border: 2px solid __BORDER__; background: #fff; overflow: hidden; }
+.step.ready { border-color: __GREEN__; background: __MINT__; }
+.step.progress { border-color: __ACCENT__; background: __SOFT__; box-shadow: 0 0 0 3px rgba(101,88,224,.14); }
+.step.future { opacity: .85; }
+.step.empty { border-style: dashed; background: transparent; display: flex; align-items: center; justify-content: center;
+              font-size: 12px; color: __MUTED__; text-align: center; }
+.st { font-family: "Space Grotesk", "Inter", sans-serif; font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ss { font-family: "Space Mono", monospace; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-top: 2px; color: __MUTED__; }
+.ready .ss { color: #1F8A5B; } .progress .ss { color: __ACCENT_DARK__; }
+.sbar { position: absolute; left: 12px; right: 12px; bottom: 8px; height: 5px; border-radius: 3px; background: rgba(20,20,31,.10); overflow: hidden; }
+.sbar span { display: block; height: 100%; border-radius: 3px; background: __MUTED__; }
+.ready .sbar span { background: __GREEN__; } .progress .sbar span { background: __ACCENT__; }
+.role { position: absolute; width: __RW__px; height: __RH__px; padding: 14px 18px; border-radius: 18px; border: 2px solid __BORDER__; background: #fff;
+        box-shadow: 0 1px 2px rgba(20,20,31,.04), 0 10px 24px rgba(101,88,224,.08); }
+.role.ready { border-color: __GREEN__; background: __MINT__; }
+.role.progress { border-color: __ACCENT__; background: __SOFT__; box-shadow: 0 0 0 4px rgba(101,88,224,.15), 0 10px 24px rgba(101,88,224,.12); }
+.eyebrow { font-family: "Space Mono", monospace; font-size: 10.5px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: __MUTED__; }
+.ready .eyebrow { color: #1F8A5B; } .progress .eyebrow { color: __ACCENT_DARK__; }
+.rt { font-family: "Space Grotesk", "Inter", sans-serif; font-size: 21px; font-weight: 700; line-height: 1.15; margin-top: 4px;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.rcount { position: absolute; left: 18px; bottom: 36px; font-size: 12px; color: __MUTED__; }
+.rwrap { position: absolute; left: 18px; right: 18px; bottom: 14px; display: flex; align-items: center; gap: 10px; }
+.rbar { flex: 1; height: 9px; border-radius: 5px; background: rgba(20,20,31,.10); overflow: hidden; }
+.rbar span { display: block; height: 100%; border-radius: 5px; background: __MUTED__; }
+.ready .rbar span { background: __GREEN__; } .progress .rbar span { background: __ACCENT__; }
+.rpct { font-family: "Space Grotesk", sans-serif; font-size: 16px; font-weight: 700; min-width: 40px; text-align: right; }
+"""
+
+
+def job_roles_flow_html(roles: list[dict]) -> None:
+    """
+    Each job role as a small flowchart: the roadmap steps it needs are stacked on the left
+    (status colour + completion bar), arrows run from every step into the role card on
+    the right, which turns green ("Job ready") once all of its steps are Ready.
+    Each role: {"title", "status" ("Ready"/"In Progress"/"Future"/"No steps"), "pct",
+    "ready_count", "total", "steps": [{"title", "status", "progress_pct", "lane", "order_index"}]}.
+    Drawn in an iframe with fixed box sizes so the arrow coordinates are exact.
+    """
+    import html as html_lib
+
+    SW, SH, SGAP, CONN, RW, RH, PAD, BGAP = 230, 64, 12, 110, 300, 142, 8, 30
+    status_class = {"Ready": "ready", "In Progress": "progress"}
+    role_x = PAD + SW + CONN
+    total_w = role_x + RW + PAD
+
+    body, paths = [], []
+    y0 = PAD
+    for role in roles:
+        steps = role["steps"]
+        n = len(steps)
+        steps_h = n * SH + (n - 1) * SGAP if n else SH
+        block_h = max(RH, steps_h)
+        role_top = y0 + (block_h - RH) / 2
+        steps_top = y0 + (block_h - steps_h) / 2
+        cls = status_class.get(role["status"], "future")
+        eyebrow = "JOB READY" if role["status"] == "Ready" else "JOB ROLE"
+
+        if n == 0:
+            body.append(f'<div class="step empty" style="left:{PAD}px;top:{steps_top}px">'
+                        f'No roadmap steps attached yet</div>')
+        for i, step in enumerate(steps):
+            top = steps_top + i * (SH + SGAP)
+            scls = status_class.get(step["status"], "future")
+            pct = step.get("progress_pct")
+            shown = 100.0 if step["status"] == "Ready" else max(0.0, min(float(pct or 0.0), 100.0))
+            pct_text = f" &middot; {shown:.0f}%" if (pct is not None or step["status"] == "Ready") else ""
+            tip = html_lib.escape(f"Track {step.get('lane', 1)} - Step {step.get('order_index', '')}")
+            body.append(
+                f'<div class="step {scls}" title="{tip}" style="left:{PAD}px;top:{top}px">'
+                f'<div class="st">{html_lib.escape(step["title"])}</div>'
+                f'<div class="ss">{html_lib.escape(step["status"])}{pct_text}</div>'
+                f'<div class="sbar"><span style="width:{shown}%"></span></div></div>'
+            )
+            x1, y1 = PAD + SW, top + SH / 2
+            x2, y2 = role_x - 3, role_top + RH / 2
+            mid = (x1 + x2) / 2
+            ready = step["status"] == "Ready"
+            paths.append(
+                f'<path d="M{x1} {y1} C{mid} {y1}, {mid} {y2}, {x2} {y2}" fill="none" '
+                f'stroke="{_GREEN if ready else "#A9A3D9"}" stroke-width="2.2" '
+                f'marker-end="url(#{"arrG" if ready else "arrM"})"/>'
+            )
+
+        shown_pct = max(0.0, min(float(role["pct"]), 100.0))
+        count_text = (f'{role["ready_count"]} of {role["total"]} steps ready' if role["total"]
+                      else "Attach roadmap steps below")
+        body.append(
+            f'<div class="role {cls}" style="left:{role_x}px;top:{role_top}px">'
+            f'<div class="eyebrow">{eyebrow}</div><div class="rt">{html_lib.escape(role["title"])}</div>'
+            f'<div class="rcount">{count_text}</div>'
+            f'<div class="rwrap"><div class="rbar"><span style="width:{shown_pct}%"></span></div>'
+            f'<span class="rpct">{shown_pct:.0f}%</span></div></div>'
+        )
+        y0 += block_h + BGAP
+
+    total_h = y0 - BGAP + PAD
+    css = (
+        _ROLES_CSS.replace("__INK__", _INK).replace("__MUTED__", _MUTED).replace("__BORDER__", _CARD_BORDER)
+        .replace("__GREEN__", _GREEN).replace("__MINT__", _MINT).replace("__ACCENT_DARK__", _ACCENT_DARK)
+        .replace("__ACCENT__", _ACCENT).replace("__SOFT__", _ACCENT_SOFT)
+        .replace("__SW__", str(SW)).replace("__SH__", str(SH)).replace("__RW__", str(RW)).replace("__RH__", str(RH))
+    )
+    markers = (
+        '<svg width="0" height="0" style="position:absolute"><defs>'
+        + "".join(
+            f'<marker id="{mid}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">'
+            f'<path d="M0 0 L10 5 L0 10 z" fill="{colour}"/></marker>'
+            for mid, colour in (("arrG", _GREEN), ("arrM", "#A9A3D9"))
+        )
+        + "</defs></svg>"
+    )
+    doc = (
+        f"<style>@import url('{_FONT_IMPORT}');{css}</style>{markers}"
+        f'<div style="position:relative;width:{total_w}px;height:{total_h}px">'
+        f'<svg width="{total_w}" height="{total_h}">{"".join(paths)}</svg>{"".join(body)}</div>'
+    )
+    components.html(doc, height=total_h + 20, scrolling=True)
+
+
+_BOARD_CSS = """
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: __INK__; }
+.board { display: grid; grid-template-columns: repeat(4, minmax(215px, 1fr)); gap: 14px; padding: 4px 2px 8px 2px; }
+.col { background: __SURFACE__; border: 1px solid __BORDER__; border-radius: 18px; padding: 12px 12px 8px 12px; }
+.col-head { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 12px 2px;
+            padding-top: 10px; border-top: 4px solid var(--c); border-radius: 2px; }
+.col-name { font-family: "Space Mono", monospace; font-size: 11.5px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--c); }
+.col-count { font-family: "Space Mono", monospace; font-size: 11px; font-weight: 700; background: #fff; border: 1px solid __BORDER__;
+             border-radius: 999px; padding: 1px 9px; color: __MUTED__; }
+.job { position: relative; height: __CARD_H__px; margin-bottom: 12px; padding: 12px 14px; border-radius: 14px; background: #fff;
+       border: 1px solid __BORDER__; border-left: 4px solid var(--c); box-shadow: 0 1px 2px rgba(20,20,31,.04), 0 6px 16px rgba(101,88,224,.07); overflow: hidden; }
+.job.pinned { box-shadow: 0 0 0 3px rgba(101,88,224,.18), 0 6px 16px rgba(101,88,224,.12); }
+.row1 { display: flex; align-items: center; justify-content: space-between; height: 22px; }
+.pkg { font-family: "Space Mono", monospace; font-size: 11px; font-weight: 700; background: __SOFT__; color: __ACCENT_DARK__; border-radius: 999px; padding: 2px 10px; }
+.nopkg { font-family: "Space Mono", monospace; font-size: 10.5px; color: __MUTED__; }
+.pin { font-family: "Space Mono", monospace; font-size: 9.5px; font-weight: 700; letter-spacing: .1em; background: __ACCENT__; color: #fff; border-radius: 999px; padding: 2px 8px; }
+.ttl { font-family: "Space Grotesk", "Inter", sans-serif; font-size: 15.5px; font-weight: 700; line-height: 1.2; margin-top: 7px;
+       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.co { font-size: 12px; color: __MUTED__; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl { position: absolute; left: 14px; right: 14px; bottom: 34px; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.dl-date { font-family: "Space Mono", monospace; font-size: 10px; letter-spacing: .04em; color: __MUTED__; text-transform: uppercase; white-space: nowrap; }
+.chip { font-family: "Space Mono", monospace; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
+.chip.ok { background: __SOFT__; color: __ACCENT_DARK__; } .chip.soon { background: #FEF1D6; color: #A86A00; }
+.chip.late { background: #FDE9E4; color: #C23B2E; } .chip.done { background: __MINT__; color: #1F8A5B; } .chip.none { background: #F1F0F7; color: __MUTED__; }
+.pwrap { position: absolute; left: 14px; right: 14px; bottom: 11px; display: flex; align-items: center; gap: 7px; }
+.pbar { flex: 1; height: 7px; border-radius: 4px; background: rgba(20,20,31,.10); overflow: hidden; }
+.pbar span { display: block; height: 100%; border-radius: 4px; background: var(--c); }
+.pct { font-size: 11px; font-weight: 700; min-width: 30px; text-align: right; }
+.nogoal { font-size: 10.5px; color: __MUTED__; }
+.empty { height: 64px; display: flex; align-items: center; justify-content: center; border: 2px dashed __BORDER__; border-radius: 14px;
+         color: __MUTED__; font-size: 12px; margin-bottom: 12px; }
+"""
+
+
+def job_board_html(jobs: list[dict]) -> None:
+    """
+    The job targets as a board with four columns (Future -> In Progress -> Ready -> Achieved).
+    Each card shows the job, package, pin tag, deadline with a colour-coded countdown, and a
+    completion bar from its linked goals ("No goal linked" when there's nothing to measure).
+    Each job: {"title", "company", "status", "deadline" ('YYYY-MM-DD' or None),
+    "target_package", "is_pinned", "progress_pct" (float or None)}.
+    """
+    import html as html_lib
+    from datetime import date
+
+    CARD_H = 156
+    columns = [("Future", "#8F8AA8"), ("In Progress", _ACCENT), ("Ready", _GREEN), ("Achieved", "#1F8A5B")]
+    today = date.today()
+
+    def chip(job: dict) -> tuple[str, str, str]:
+        """(date text, chip css class, chip label)"""
+        if job["status"] == "Achieved":
+            when = f"was {date.fromisoformat(job['deadline']):%d %b %Y}" if job.get("deadline") else ""
+            return when, "done", "Achieved"
+        if not job.get("deadline"):
+            return "", "none", "No deadline"
+        deadline = date.fromisoformat(job["deadline"])
+        left = (deadline - today).days
+        when = f"{deadline:%d %b %Y}"
+        if left < 0:
+            return when, "late", f"Overdue {abs(left)}d"
+        if left == 0:
+            return when, "soon", "Today"
+        return when, ("soon" if left <= 30 else "ok"), f"{left} day{'s' if left != 1 else ''} left"
+
+    rendered_columns = []
+    for name, colour in columns:
+        in_column = [j for j in jobs if j["status"] == name]
+        cards = []
+        for job in in_column:
+            when, chip_class, chip_label = chip(job)
+            package = job.get("target_package")
+            pkg_html = (f'<span class="pkg">{html_lib.escape(package)}</span>' if package
+                        else '<span class="nopkg">no package set</span>')
+            pin_html = '<span class="pin">PINNED</span>' if job.get("is_pinned") else ""
+            company = f'<div class="co">{html_lib.escape(job["company"])}</div>' if job.get("company") else ""
+            pct = job.get("progress_pct")
+            if pct is None:
+                progress = '<div class="pwrap"><span class="nogoal">No goal linked</span></div>'
+            else:
+                shown = max(0.0, min(float(pct), 100.0))
+                progress = (f'<div class="pwrap"><div class="pbar"><span style="width:{shown}%"></span></div>'
+                            f'<span class="pct">{shown:.0f}%</span></div>')
+            cards.append(
+                f'<div class="job{" pinned" if job.get("is_pinned") else ""}" style="--c:{colour}">'
+                f'<div class="row1">{pkg_html}{pin_html}</div>'
+                f'<div class="ttl">{html_lib.escape(job["title"])}</div>{company}'
+                f'<div class="dl"><span class="dl-date">{html_lib.escape(when)}</span>'
+                f'<span class="chip {chip_class}">{html_lib.escape(chip_label)}</span></div>'
+                f'{progress}</div>'
+            )
+        body = "".join(cards) or '<div class="empty">Nothing here</div>'
+        rendered_columns.append(
+            f'<div class="col" style="--c:{colour}"><div class="col-head"><span class="col-name">{name}</span>'
+            f'<span class="col-count">{len(in_column)}</span></div>{body}</div>'
+        )
+
+    tallest = max(max(len([j for j in jobs if j["status"] == name]) for name, _ in columns), 0)
+    height = 70 + max(tallest, 1) * (CARD_H + 12) + 30
+    css = (
+        _BOARD_CSS.replace("__INK__", _INK).replace("__MUTED__", _MUTED).replace("__BORDER__", _CARD_BORDER)
+        .replace("__SURFACE__", _SURFACE).replace("__SOFT__", _ACCENT_SOFT).replace("__ACCENT_DARK__", _ACCENT_DARK)
+        .replace("__ACCENT__", _ACCENT).replace("__MINT__", _MINT).replace("__CARD_H__", str(CARD_H))
+    )
+    doc = f"<style>@import url('{_FONT_IMPORT}');{css}</style><div class=\"board\">{''.join(rendered_columns)}</div>"
+    components.html(doc, height=height, scrolling=True)
 
 
 def duration_input(label: str, key: str, default_minutes: int = 30, max_hours: int = 23) -> int:

@@ -14,12 +14,15 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
+from utils.helper import load_leave_dates
+
 PRIMARY_COLOR = "#6558E0"
 PRIMARY_COLOR_SOFT = "rgba(101, 88, 224, 0.16)"
 INK = "#14141F"
 MUTED = "#6B7084"
 GRID_COLOR = "#ECEAF5"
 # indigo first, then the reference site's blue / orange / green / amber accents
+LEAVE_COLOR = "#2F7BE5"  # blue: a day you were away (see Dashboard > App Streak > Mark leave)
 COLOR_SEQUENCE = ["#6558E0", "#2F7BE5", "#F2784B", "#2FA36B", "#F5A623", "#A99BF5", "#6B7084"]
 
 _FONT = dict(family="Inter, sans-serif", color=INK, size=13)
@@ -85,6 +88,62 @@ def donut_chart(df: pd.DataFrame, names: str, values: str, title: str) -> go.Fig
     return fig
 
 
+def _week_key(d) -> str:
+    return pd.Timestamp(d).strftime("%G-W%V")
+
+
+def _leave_weeks(data: pd.DataFrame, date_col: str, leave_dates) -> list:
+    """Week keys of leave days that fall inside the chart's date range --
+    added to the x axis so a leave day is visible even when its whole
+    week has no activity rows (e.g. the task-completion heatmap)."""
+    if not leave_dates or data.empty:
+        return []
+    lo, hi = data[date_col].min().date(), data[date_col].max().date()
+    return [_week_key(d) for d in leave_dates if lo <= d <= hi]
+
+
+def _leave_overlay(week_order: list, leave_dates, activity_pivot: pd.DataFrame):
+    """
+    A blue heatmap layer drawn over the activity heatmap: one blue cell per
+    leave day that had no real activity (a day you studied anyway keeps its
+    green). Transparent everywhere else. Returns None if there's nothing
+    to draw.
+    """
+    if not leave_dates:
+        return None
+
+    z = np.full((7, len(week_order)), np.nan)
+    text = np.full((7, len(week_order)), "", dtype=object)
+    col_index = {w: i for i, w in enumerate(week_order)}
+    drawn = False
+    for d in leave_dates:
+        col = col_index.get(_week_key(d))
+        if col is None:
+            continue
+        row = pd.Timestamp(d).weekday()
+        if activity_pivot.iloc[row, col] == 0:
+            z[row, col] = 1
+            text[row, col] = pd.Timestamp(d).strftime("%d %b %Y")
+            drawn = True
+    if not drawn:
+        return None
+
+    return go.Heatmap(
+        z=z,
+        x=week_order,
+        y=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+        text=text,
+        zmin=0,
+        zmax=1,
+        colorscale=[[0, LEAVE_COLOR], [1, LEAVE_COLOR]],
+        showscale=False,
+        xgap=3,
+        ygap=3,
+        hoverongaps=False,
+        hovertemplate="%{text}<br>On leave (streak safe)<extra></extra>",
+    )
+
+
 def study_heatmap(df: pd.DataFrame, title: str = "Study Activity") -> go.Figure:
     """
     GitHub-style calendar heatmap: weeks along x, weekday along y,
@@ -104,22 +163,27 @@ def calendar_heatmap(
     title: str,
     colorscale: str = "Greens",
     hover_suffix: str = "",
+    leave_dates=None,
 ) -> go.Figure:
     """
     Generic GitHub-style calendar heatmap: weeks along x, weekday
     along y, colored by value_col that day. Used for the Study
     heatmap, the Dashboard coding-streak heatmap, and the task-
-    completion streak heatmap.
+    completion streak heatmap. Leave days (leave_dates, default: the
+    logged-in user's) are drawn in blue.
     """
     if df.empty:
         return go.Figure()
+
+    if leave_dates is None:
+        leave_dates = load_leave_dates()
 
     data = df.copy()
     data["weekday"] = data[date_col].dt.weekday  # 0=Monday
     # Distinguish weeks across year boundaries by combining year + week.
     data["week_key"] = data[date_col].dt.strftime("%G-W%V")
 
-    week_order = sorted(data["week_key"].unique())
+    week_order = sorted(set(data["week_key"].unique()) | set(_leave_weeks(data, date_col, leave_dates)))
     weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
     pivot = data.pivot_table(
@@ -139,6 +203,9 @@ def calendar_heatmap(
             colorbar=dict(thickness=12, outlinewidth=0, tickfont=dict(color=MUTED, size=11)),
         )
     )
+    overlay = _leave_overlay(week_order, [d for d in leave_dates if d <= data[date_col].max().date()], pivot)
+    if overlay is not None:
+        fig.add_trace(overlay)
     fig = _apply_base_layout(fig, title)
     fig.update_layout(xaxis=dict(showticklabels=False, showgrid=False), yaxis=dict(showgrid=False))
     return fig
@@ -152,7 +219,7 @@ def gym_heatmap(df: pd.DataFrame, title: str = "Gym Activity") -> go.Figure:
     )
 
 
-def activity_heatmap(df: pd.DataFrame, title: str = "App Activity") -> go.Figure:
+def activity_heatmap(df: pd.DataFrame, title: str = "App Activity", leave_dates=None) -> go.Figure:
     """
     The Dashboard's overall app-activity heatmap: colored by a
     combined study+coding intensity score, with a rich hover showing
@@ -164,12 +231,15 @@ def activity_heatmap(df: pd.DataFrame, title: str = "App Activity") -> go.Figure
     if df.empty:
         return go.Figure()
 
+    if leave_dates is None:
+        leave_dates = load_leave_dates()
+
     data = df.copy()
     data["weekday"] = data["date"].dt.weekday
     data["week_key"] = data["date"].dt.strftime("%G-W%V")
     data["date_label"] = data["date"].dt.strftime("%d %b %Y")
 
-    week_order = sorted(data["week_key"].unique())
+    week_order = sorted(set(data["week_key"].unique()) | set(_leave_weeks(data, "date", leave_dates)))
     weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
     def _pivot(value_col, fill=0):
@@ -203,6 +273,9 @@ def activity_heatmap(df: pd.DataFrame, title: str = "App Activity") -> go.Figure
             colorbar=dict(thickness=12, outlinewidth=0, tickfont=dict(color=MUTED, size=11)),
         )
     )
+    overlay = _leave_overlay(week_order, [d for d in leave_dates if d <= data["date"].max().date()], pivot_score)
+    if overlay is not None:
+        fig.add_trace(overlay)
     fig = _apply_base_layout(fig, title)
     fig.update_layout(xaxis=dict(showticklabels=False, showgrid=False), yaxis=dict(showgrid=False))
     return fig
