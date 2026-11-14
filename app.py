@@ -14,7 +14,15 @@ navigation once the user is logged in.
 import streamlit as st
 
 from auth.auth_utils import authenticate_user, create_user
-from auth.session import current_user_id, current_user_name, is_logged_in, login, logout
+from auth.session import (
+    current_user_id,
+    current_user_name,
+    flush_cookie_actions,
+    is_logged_in,
+    login,
+    logout,
+    try_auto_login,
+)
 from database import cloud_backup
 from database.create_tables import initialize_database
 from database.queries import ensure_default_subjects, get_avatar_base64
@@ -29,6 +37,7 @@ def render_login_form() -> None:
     with st.form("login_form"):
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
+        remember = st.checkbox("Keep me logged in on this device (untick on a shared computer)", value=True)
         submitted = st.form_submit_button("Log In", use_container_width=True)
 
     if submitted:
@@ -39,7 +48,7 @@ def render_login_form() -> None:
         if user is None:
             st.error("Incorrect email or password.")
             return
-        login(user)
+        login(user, remember=remember)
         st.success(f"Welcome back, {user['name']}!")
         st.rerun()
 
@@ -70,7 +79,7 @@ def render_signup_form() -> None:
 
         ensure_default_subjects(user_id)
         user = {"id": user_id, "name": name.strip(), "email": email.strip().lower()}
-        login(user)
+        login(user, remember=True)
         st.success("Account created! Setting up your workspace...")
         st.rerun()
 
@@ -144,6 +153,9 @@ def render_logged_in_view() -> None:
         logout()
         st.rerun()
 
+
+flush_cookie_actions()
+try_auto_login()
 
 if is_logged_in():
     render_logged_in_view()

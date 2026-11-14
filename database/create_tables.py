@@ -47,6 +47,21 @@ def create_subjects_table(conn) -> None:
     )
 
 
+def create_login_tokens_table(conn) -> None:
+    """"Keep me logged in" tokens (only a hash of each token is stored)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS login_tokens (
+            token_hash TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
 def create_study_sessions_table(conn) -> None:
     conn.execute(
         """
@@ -547,6 +562,7 @@ def initialize_database() -> None:
     conn = get_connection()
     try:
         create_users_table(conn)
+        create_login_tokens_table(conn)
         create_subjects_table(conn)
         create_study_sessions_table(conn)
         create_coding_logs_table(conn)
