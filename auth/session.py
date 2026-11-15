@@ -15,7 +15,7 @@ cookie and logs you straight in. Cookies are written by a tiny script
 
 import streamlit as st
 
-from auth import remember_tokens
+from auth import cookie_bridge, remember_tokens
 from config import timezone as _timezone  # noqa: F401  (sets the app to IST on import)
 
 COOKIE_NAME = "lifeos_session"
@@ -46,20 +46,52 @@ def login(user: dict, remember: bool = False) -> None:
             pass  # remembering is a convenience; never block a normal login
 
 
+def _browser_cookie_reply():
+    """Ask the browser for the login cookie. None = browser hasn't answered yet."""
+    try:
+        return cookie_bridge.read_cookie(COOKIE_NAME)
+    except Exception:
+        return {"value": ""}  # component unsupported here: behave as "no saved login", never hang
+
+
+def login_diag() -> str:
+    """Short human-readable result of the last saved-login check (shown on the login page)."""
+    return st.session_state.get("_login_diag", "not checked yet")
+
+
 def try_auto_login() -> None:
     """If this browser has a valid "keep me logged in" cookie, log in without a password.
-    Tries once per session. Never writes to the database."""
+
+    The cookie is read in the browser (Streamlit Cloud doesn't pass JS-set cookies
+    to the server). Until the browser answers, nothing is decided; the answer arrives
+    as a rerun and this function runs again. Never writes to the database."""
     if is_logged_in() or st.session_state.get("_auto_login_tried"):
         return
+
+    token = _cookie_token()  # fast path: works when the server does see the cookie (e.g. localhost)
+    if not token:
+        reply = _browser_cookie_reply()
+        if reply is None:
+            st.session_state["_login_diag"] = "checking the browser..."
+            return
+        token = (reply.get("value") or "") if isinstance(reply, dict) else ""
+
     st.session_state["_auto_login_tried"] = True
     try:
-        user = remember_tokens.user_for_token(_cookie_token())
+        user = remember_tokens.user_for_token(token)
     except Exception:
         user = None
+
     if user is not None:
         st.session_state["user_id"] = user["id"]
         st.session_state["user_name"] = user["name"]
         st.session_state["user_email"] = user["email"]
+        st.session_state["_remember_token"] = token  # so Log Out can delete exactly this token
+        st.session_state["_login_diag"] = "logged in from saved login"
+    elif token:
+        st.session_state["_login_diag"] = "saved login found but expired or unknown"
+    else:
+        st.session_state["_login_diag"] = "no saved login in this browser"
 
 
 def flush_cookie_actions() -> None:
@@ -134,6 +166,10 @@ def require_login() -> None:
     """
     flush_cookie_actions()
     try_auto_login()
+
+    if not is_logged_in() and login_diag().startswith("checking"):
+        st.info("Checking your saved login... If this stays here, open the main page and log in.")
+        st.stop()
 
     if not is_logged_in():
         st.warning("Please log in to view this page.")

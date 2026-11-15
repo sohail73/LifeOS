@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <script>
+      // Tiny Streamlit component: reads one cookie IN THE BROWSER and sends its value to Python.
+      // (Streamlit Cloud does not reliably pass JS-set cookies to the server, so Python
+      // cannot read them itself.) Uses Streamlit's plain postMessage protocol, no libraries.
+      (function () {
+        var sentOnce = false;
+        var lastValue = null;
+
+        function post(type, extra) {
+          var message = { isStreamlitMessage: true, type: type };
+          for (var key in extra) { message[key] = extra[key]; }
+          window.parent.postMessage(message, "*");
+        }
+
+        function getCookie(name) {
+          var parts = document.cookie ? document.cookie.split(";") : [];
+          for (var i = 0; i < parts.length; i++) {
+            var item = parts[i].replace(/^\s+/, "");
+            if (item.indexOf(name + "=") === 0) {
+              return decodeURIComponent(item.substring(name.length + 1));
+            }
+          }
+          return "";
+        }
+
+        window.addEventListener("message", function (event) {
+          var data = event.data;
+          if (!data || data.type !== "streamlit:render") { return; }
+          var name = (data.args && data.args.name) || "";
+          var value = getCookie(name);
+          if (sentOnce && value === lastValue) { return; }  // no pointless reruns
+          sentOnce = true;
+          lastValue = value;
+          post("streamlit:setComponentValue", { value: { value: value }, dataType: "json" });
+        });
+
+        post("streamlit:componentReady", { apiVersion: 1 });
+        post("streamlit:setFrameHeight", { height: 0 });
+      })();
+    </script>
+  </body>
+</html>

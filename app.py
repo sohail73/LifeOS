@@ -20,6 +20,7 @@ from auth.session import (
     flush_cookie_actions,
     is_logged_in,
     login,
+    login_diag,
     logout,
     try_auto_login,
 )
@@ -98,7 +99,10 @@ def render_logged_out_view() -> None:
         server_line = "Cloud backup: ON, no restore needed (this server's data is already in sync)"
     else:
         server_line = "Cloud backup: ON, startup check has not finished"
-    st.caption(f"Server status -- {server_line} -- accounts on this server: {backup_status['accounts']}")
+    st.caption(
+        f"Server status -- {server_line} -- accounts on this server: {backup_status['accounts']}"
+        f" -- saved login: {login_diag()}"
+    )
     if backup_status["blocked"]:
         st.error(
             "Your saved data could not be restored right now, so please do NOT create a new account "
