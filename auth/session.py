@@ -8,10 +8,13 @@ helpers instead of touching st.session_state itself.
 
 st.session_state alone is wiped when the browser tab is closed, so
 "Keep me logged in" adds a browser cookie holding a random token
-(see auth/remember_tokens.py). Next visit, try_auto_login() reads the
-cookie and logs you straight in. Cookies are written by a tiny script
-(flush_cookie_actions) on the page render AFTER login/logout.
+(see auth/remember_tokens.py). Next visit, sync_browser_cookie() reads
+the cookie and logs you straight in. The cookie is read, written and
+cleared inside the browser by a tiny component (auth/cookie_bridge.py),
+because Streamlit Cloud doesn't reliably pass JS-set cookies to the server.
 """
+
+import secrets
 
 import streamlit as st
 
@@ -46,36 +49,17 @@ def login(user: dict, remember: bool = False) -> None:
             pass  # remembering is a convenience; never block a normal login
 
 
-def _browser_cookie_reply():
-    """Ask the browser for the login cookie. None = browser hasn't answered yet."""
-    try:
-        return cookie_bridge.read_cookie(COOKIE_NAME)
-    except Exception:
-        return {"value": ""}  # component unsupported here: behave as "no saved login", never hang
-
-
 def login_diag() -> str:
     """Short human-readable result of the last saved-login check (shown on the login page)."""
     return st.session_state.get("_login_diag", "not checked yet")
 
 
-def try_auto_login() -> None:
-    """If this browser has a valid "keep me logged in" cookie, log in without a password.
+def _queue_bridge(action: str, value: str = "") -> None:
+    st.session_state["_bridge_args"] = {"action": action, "value": value, "nonce": secrets.token_hex(4)}
 
-    The cookie is read in the browser (Streamlit Cloud doesn't pass JS-set cookies
-    to the server). Until the browser answers, nothing is decided; the answer arrives
-    as a rerun and this function runs again. Never writes to the database."""
-    if is_logged_in() or st.session_state.get("_auto_login_tried"):
-        return
 
-    token = _cookie_token()  # fast path: works when the server does see the cookie (e.g. localhost)
-    if not token:
-        reply = _browser_cookie_reply()
-        if reply is None:
-            st.session_state["_login_diag"] = "checking the browser..."
-            return
-        token = (reply.get("value") or "") if isinstance(reply, dict) else ""
-
+def _finish_auto_login(token: str) -> None:
+    """Decide the saved-login check with the cookie value found (empty = none)."""
     st.session_state["_auto_login_tried"] = True
     try:
         user = remember_tokens.user_for_token(token)
@@ -94,27 +78,66 @@ def try_auto_login() -> None:
         st.session_state["_login_diag"] = "no saved login in this browser"
 
 
-def flush_cookie_actions() -> None:
-    """Writes/clears the browser cookie requested by login()/logout(). Call near the top of every page."""
-    action = st.session_state.pop("_cookie_action", None)
-    if not action:
-        return
-    kind, token = action
-    max_age = 60 * 60 * 24 * remember_tokens.TOKEN_DAYS if kind == "set" else 0
-    value = token if kind == "set" else ""
-    script = (
-        "<script>(function(){"
-        "var p=window.parent;"
-        "var secure=(p.location.protocol==='https:')?'; Secure':'';"
-        f"p.document.cookie='{COOKIE_NAME}={value}; max-age={max_age}; path=/; SameSite=Lax'+secure;"
-        "})();</script>"
-    )
-    try:
-        import streamlit.components.v1 as components
+def sync_browser_cookie() -> None:
+    """Call once, near the top of every page (require_login() does it for you).
 
-        components.html(script, height=0)
-    except Exception:
-        pass
+    - Writes/clears the "keep me logged in" cookie requested by login()/logout().
+    - If nobody is logged in yet, looks for a saved-login cookie and logs in with it.
+
+    All cookie work happens in the browser through a tiny component (auth/cookie_bridge.py);
+    its answer arrives as a rerun, so nothing here blocks. Never writes to the database."""
+    action = st.session_state.pop("_cookie_action", None)
+    if action:
+        kind, token = action
+        _queue_bridge("set" if kind == "set" else "clear", token or "")
+    elif (
+        st.session_state.get("_bridge_args") is None
+        and not is_logged_in()
+        and not st.session_state.get("_auto_login_tried")
+    ):
+        server_token = _cookie_token()  # fast path: works when the server does see the cookie (e.g. localhost)
+        if server_token:
+            _finish_auto_login(server_token)
+        else:
+            _queue_bridge("get")
+
+    args = st.session_state.get("_bridge_args")
+    if not args:
+        return
+
+    max_age = 60 * 60 * 24 * remember_tokens.TOKEN_DAYS if args["action"] == "set" else 0
+    try:
+        reply = cookie_bridge.cookie_op(COOKIE_NAME, args["action"], args["value"], max_age, args["nonce"])
+    except Exception as exc:
+        st.session_state["_bridge_args"] = None
+        if args["action"] == "get":
+            _finish_auto_login("")
+            st.session_state["_login_diag"] = f"browser cookie check failed ({type(exc).__name__})"
+        else:
+            st.toast(f"Keep-login could not be saved ({type(exc).__name__}: {exc})", icon="⚠️")
+        return
+
+    if not (isinstance(reply, dict) and reply.get("nonce") == args["nonce"]):
+        if args["action"] == "get":
+            st.session_state["_login_diag"] = "checking the browser..."
+        return  # browser hasn't answered yet; its answer triggers a rerun
+
+    st.session_state["_bridge_args"] = None
+    if args["action"] == "get":
+        _finish_auto_login(reply.get("value") or "")
+    elif args["action"] == "set":
+        if reply.get("ok"):
+            st.toast("Keep-login is on: this browser will remember you.", icon="✅")
+        else:
+            st.toast("Keep-login failed: your browser refused to store the cookie.", icon="⚠️")
+
+
+def flush_cookie_actions() -> None:
+    """Kept so older callers keep working; sync_browser_cookie() does the work."""
+    return None
+
+
+try_auto_login = sync_browser_cookie  # old name, same behaviour
 
 
 def logout() -> None:
@@ -164,8 +187,7 @@ def require_login() -> None:
       passed without being marked done) and shows a toast for any
       goal that starts today (analytics.goal_maintenance).
     """
-    flush_cookie_actions()
-    try_auto_login()
+    sync_browser_cookie()
 
     if not is_logged_in() and login_diag().startswith("checking"):
         st.info("Checking your saved login... If this stays here, open the main page and log in.")
