@@ -22,6 +22,14 @@ from auth import cookie_bridge, remember_tokens
 from config import timezone as _timezone  # noqa: F401  (sets the app to IST on import)
 
 COOKIE_NAME = "lifeos_session"
+KEEP_LOGIN_VERSION = "v3"
+
+
+def _log(event: str) -> None:
+    """Remember the last few keep-login events (shown in the sidebar status panel)."""
+    log = st.session_state.setdefault("_kl_log", [])
+    log.append(event)
+    del log[:-10]
 
 
 def _cookie_token():
@@ -45,13 +53,20 @@ def login(user: dict, remember: bool = False) -> None:
             token = remember_tokens.create_token(user["id"])
             st.session_state["_remember_token"] = token
             st.session_state["_cookie_action"] = ("set", token)
-        except Exception:
-            pass  # remembering is a convenience; never block a normal login
+            _log("login: 'keep me logged in' ticked, token saved in the database")
+        except Exception as exc:  # never block a normal login, but say what went wrong
+            _log(f"login: token could NOT be saved ({type(exc).__name__}: {exc})")
+    else:
+        _log("login: 'keep me logged in' NOT ticked")
+
+
+def _diag_raw() -> str:
+    return st.session_state.get("_login_diag", "not checked yet")
 
 
 def login_diag() -> str:
     """Short human-readable result of the last saved-login check (shown on the login page)."""
-    return st.session_state.get("_login_diag", "not checked yet")
+    return f"{_diag_raw()} [keep-login {KEEP_LOGIN_VERSION}]"
 
 
 def _queue_bridge(action: str, value: str = "") -> None:
@@ -78,7 +93,7 @@ def _finish_auto_login(token: str) -> None:
         st.session_state["_login_diag"] = "no saved login in this browser"
 
 
-def sync_browser_cookie() -> None:
+def _sync_browser_cookie() -> None:
     """Call once, near the top of every page (require_login() does it for you).
 
     - Writes/clears the "keep me logged in" cookie requested by login()/logout().
@@ -90,6 +105,7 @@ def sync_browser_cookie() -> None:
     if action:
         kind, token = action
         _queue_bridge("set" if kind == "set" else "clear", token or "")
+        _log(f"asked the browser to {'store' if kind == 'set' else 'remove'} the login cookie")
     elif (
         st.session_state.get("_bridge_args") is None
         and not is_logged_in()
@@ -97,9 +113,11 @@ def sync_browser_cookie() -> None:
     ):
         server_token = _cookie_token()  # fast path: works when the server does see the cookie (e.g. localhost)
         if server_token:
+            _log("server received the login cookie directly")
             _finish_auto_login(server_token)
         else:
             _queue_bridge("get")
+            _log("asked the browser if it has a saved login cookie")
 
     args = st.session_state.get("_bridge_args")
     if not args:
@@ -109,6 +127,7 @@ def sync_browser_cookie() -> None:
     try:
         reply = cookie_bridge.cookie_op(COOKIE_NAME, args["action"], args["value"], max_age, args["nonce"])
     except Exception as exc:
+        _log(f"browser component FAILED to start ({type(exc).__name__}: {exc})")
         st.session_state["_bridge_args"] = None
         if args["action"] == "get":
             _finish_auto_login("")
@@ -120,9 +139,16 @@ def sync_browser_cookie() -> None:
     if not (isinstance(reply, dict) and reply.get("nonce") == args["nonce"]):
         if args["action"] == "get":
             st.session_state["_login_diag"] = "checking the browser..."
+        if st.session_state.get("_kl_waiting") != args["nonce"]:
+            st.session_state["_kl_waiting"] = args["nonce"]
+            _log(f"waiting for the browser to answer ({args['action']})")
         return  # browser hasn't answered yet; its answer triggers a rerun
 
     st.session_state["_bridge_args"] = None
+    _log(
+        f"browser answered: {args['action']}, ok={reply.get('ok')}, "
+        f"cookie present in browser={bool(reply.get('value'))}"
+    )
     if args["action"] == "get":
         _finish_auto_login(reply.get("value") or "")
     elif args["action"] == "set":
@@ -130,6 +156,26 @@ def sync_browser_cookie() -> None:
             st.toast("Keep-login is on: this browser will remember you.", icon="✅")
         else:
             st.toast("Keep-login failed: your browser refused to store the cookie.", icon="⚠️")
+
+
+def _render_status_panel() -> None:
+    """Small sidebar panel with the keep-login steps. Never allowed to break a page."""
+    try:
+        with st.sidebar.expander(f"Keep-login status ({KEEP_LOGIN_VERSION})"):
+            st.caption(f"Logged in: {'yes' if is_logged_in() else 'no'}")
+            st.caption(f"Saved-login check: {_diag_raw()}")
+            for line in st.session_state.get("_kl_log", []) or ["(nothing yet)"]:
+                st.caption(f"- {line}")
+    except Exception:
+        pass
+
+
+def sync_browser_cookie() -> None:
+    """See _sync_browser_cookie(); this wrapper also draws the sidebar status panel."""
+    try:
+        _sync_browser_cookie()
+    finally:
+        _render_status_panel()
 
 
 def flush_cookie_actions() -> None:
@@ -189,7 +235,7 @@ def require_login() -> None:
     """
     sync_browser_cookie()
 
-    if not is_logged_in() and login_diag().startswith("checking"):
+    if not is_logged_in() and _diag_raw().startswith("checking"):
         st.info("Checking your saved login... If this stays here, open the main page and log in.")
         st.stop()
 
