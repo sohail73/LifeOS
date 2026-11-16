@@ -15,6 +15,8 @@ because Streamlit Cloud doesn't reliably pass JS-set cookies to the server.
 """
 
 import secrets
+import time
+from collections import deque
 
 import streamlit as st
 
@@ -22,14 +24,28 @@ from auth import cookie_bridge, remember_tokens
 from config import timezone as _timezone  # noqa: F401  (sets the app to IST on import)
 
 COOKIE_NAME = "lifeos_session"
-KEEP_LOGIN_VERSION = "v3"
+KEEP_LOGIN_VERSION = "v4"
+
+
+_PROCESS_LOG = deque(maxlen=40)  # shared by ALL sessions on this server (for debugging)
+
+
+def _session_tag() -> str:
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        ctx = get_script_run_ctx()
+        return ctx.session_id[:5] if ctx else "?"
+    except Exception:
+        return "?"
 
 
 def _log(event: str) -> None:
-    """Remember the last few keep-login events (shown in the sidebar status panel)."""
+    """Remember the last keep-login events: per session and server-wide (sidebar status panel)."""
     log = st.session_state.setdefault("_kl_log", [])
     log.append(event)
     del log[:-10]
+    _PROCESS_LOG.append(f"{time.strftime('%H:%M:%S')} [{_session_tag()}] {event}")
 
 
 def _cookie_token():
@@ -47,6 +63,8 @@ def login(user: dict, remember: bool = False) -> None:
     st.session_state["user_name"] = user["name"]
     st.session_state["user_email"] = user["email"]
     st.session_state["_auto_login_tried"] = True
+    st.session_state["_login_source"] = "login form"
+    _log(f"login() called (remember={remember})")
 
     if remember:
         try:
@@ -86,6 +104,7 @@ def _finish_auto_login(token: str) -> None:
         st.session_state["user_name"] = user["name"]
         st.session_state["user_email"] = user["email"]
         st.session_state["_remember_token"] = token  # so Log Out can delete exactly this token
+        st.session_state["_login_source"] = "saved login (cookie)"
         st.session_state["_login_diag"] = "logged in from saved login"
     elif token:
         st.session_state["_login_diag"] = "saved login found but expired or unknown"
@@ -158,24 +177,9 @@ def _sync_browser_cookie() -> None:
             st.toast("Keep-login failed: your browser refused to store the cookie.", icon="⚠️")
 
 
-def _render_status_panel() -> None:
-    """Small sidebar panel with the keep-login steps. Never allowed to break a page."""
-    try:
-        with st.sidebar.expander(f"Keep-login status ({KEEP_LOGIN_VERSION})"):
-            st.caption(f"Logged in: {'yes' if is_logged_in() else 'no'}")
-            st.caption(f"Saved-login check: {_diag_raw()}")
-            for line in st.session_state.get("_kl_log", []) or ["(nothing yet)"]:
-                st.caption(f"- {line}")
-    except Exception:
-        pass
-
-
 def sync_browser_cookie() -> None:
-    """See _sync_browser_cookie(); this wrapper also draws the sidebar status panel."""
-    try:
-        _sync_browser_cookie()
-    finally:
-        _render_status_panel()
+    """See _sync_browser_cookie()."""
+    _sync_browser_cookie()
 
 
 def flush_cookie_actions() -> None:
