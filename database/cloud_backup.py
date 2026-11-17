@@ -32,6 +32,7 @@ Secrets (Streamlit Cloud: App settings > Secrets), or environment vars:
     GITHUB_BACKUP_PATH   = "lifeos.db"   (optional)
 """
 
+import atexit
 import base64
 import hashlib
 import os
@@ -45,7 +46,9 @@ import requests
 from config.database import DB_PATH
 
 API = "https://api.github.com"
-DEBOUNCE_SECONDS = 120
+DEBOUNCE_SECONDS = 120            # wait this long after a change before the first upload
+DEFAULT_INTERVAL_MINUTES = 180    # minimum gap between uploads
+EXIT_TIMEOUT = 8                  # seconds per request when flushing at shutdown
 RETRY_SECONDS = 30
 SIDECAR = DB_PATH.parent / ".cloud_backup_sha"  # remote file version this server last synced to
 
@@ -57,6 +60,10 @@ _state = {
     "blocked": False,      # a backup exists but couldn't be restored -> never upload
     "suspend": False,      # True while we are writing a restored DB
     "timer": None,
+    "dirty": False,        # changes exist that are not uploaded yet
+    "due_at": None,        # time.time() of the next scheduled upload
+    "last_upload_ts": None,  # time.time() of the last real upload
+    "exiting": False,
     "next_retry": 0.0,
     "last_fp": None,       # fingerprint of the data at the last upload/restore
     "last_backup": None,   # datetime (UTC) of last successful upload
@@ -109,6 +116,9 @@ def status() -> dict:
         "blocked": _state["blocked"],
         "last_backup": _state["last_backup"],
         "last_error": _state["last_error"],
+        "pending": _state["dirty"],
+        "next_backup_ts": _state["due_at"],
+        "interval_minutes": _interval_seconds() // 60,
         "accounts": _user_count(),
     }
 
@@ -116,6 +126,18 @@ def status() -> dict:
 # ---------------------------------------------------------------------------
 # GitHub API
 # ---------------------------------------------------------------------------
+def _t(normal: int) -> int:
+    return EXIT_TIMEOUT if _state["exiting"] else normal
+
+
+def _interval_seconds() -> int:
+    try:
+        minutes = int(float(_secret("GITHUB_BACKUP_INTERVAL_MINUTES", DEFAULT_INTERVAL_MINUTES)))
+    except (TypeError, ValueError):
+        minutes = DEFAULT_INTERVAL_MINUTES
+    return max(1, minutes) * 60
+
+
 def _headers(cfg, raw: bool = False) -> dict:
     return {
         "Authorization": f"Bearer {cfg['token']}",
@@ -131,9 +153,9 @@ def _file_url(cfg) -> str:
 def _remote_sha(cfg):
     """Version id of the backup file in the repo, or None if the file doesn't exist yet.
     Raises if the repo/token is wrong (so a typo can't look like 'no backup yet')."""
-    r = requests.get(_file_url(cfg), headers=_headers(cfg), params={"ref": cfg["branch"]}, timeout=30)
+    r = requests.get(_file_url(cfg), headers=_headers(cfg), params={"ref": cfg["branch"]}, timeout=_t(30))
     if r.status_code == 404:
-        repo_check = requests.get(f"{API}/repos/{cfg['repo']}", headers=_headers(cfg), timeout=30)
+        repo_check = requests.get(f"{API}/repos/{cfg['repo']}", headers=_headers(cfg), timeout=_t(30))
         if repo_check.status_code != 200:
             raise RuntimeError(
                 f"Backup repo '{cfg['repo']}' not reachable (HTTP {repo_check.status_code}) -- "
@@ -145,7 +167,7 @@ def _remote_sha(cfg):
 
 
 def _remote_download(cfg) -> bytes:
-    r = requests.get(_file_url(cfg), headers=_headers(cfg, raw=True), params={"ref": cfg["branch"]}, timeout=60)
+    r = requests.get(_file_url(cfg), headers=_headers(cfg, raw=True), params={"ref": cfg["branch"]}, timeout=_t(60))
     r.raise_for_status()
     return r.content
 
@@ -159,7 +181,7 @@ def _remote_upload(cfg, data: bytes, sha, note: str = "") -> str:
     }
     if sha:
         payload["sha"] = sha
-    r = requests.put(_file_url(cfg), headers=_headers(cfg), json=payload, timeout=60)
+    r = requests.put(_file_url(cfg), headers=_headers(cfg), json=payload, timeout=_t(60))
     r.raise_for_status()
     return r.json()["content"]["sha"]
 
@@ -287,14 +309,23 @@ def restore_if_needed() -> None:
 # Backup (runs after saves)
 # ---------------------------------------------------------------------------
 def mark_dirty() -> None:
-    """Called after a commit that changed data. Schedules ONE upload ~30s later."""
+    """Called after a commit that changed data. Makes sure ONE upload is scheduled:
+    ~2 minutes from now if nothing was uploaded recently, otherwise as soon as the
+    minimum gap since the last upload has passed."""
     if _state["suspend"] or _state["blocked"] or not is_enabled():
         return
     with _lock:
+        _state["dirty"] = True
         timer = _state["timer"]
         if timer is not None and timer.is_alive():
             return
-        timer = threading.Timer(DEBOUNCE_SECONDS, _timer_fire)
+        now = time.time()
+        delay = DEBOUNCE_SECONDS
+        last = _state["last_upload_ts"]
+        if last is not None:
+            delay = max(DEBOUNCE_SECONDS, last + _interval_seconds() - now)
+        _state["due_at"] = now + delay
+        timer = threading.Timer(delay, _timer_fire)
         timer.daemon = True
         _state["timer"] = timer
         timer.start()
@@ -303,6 +334,7 @@ def mark_dirty() -> None:
 def _timer_fire() -> None:
     with _lock:
         _state["timer"] = None  # so saves during the upload schedule the next one
+        _state["due_at"] = None
     backup_now()
 
 
@@ -324,14 +356,30 @@ def backup_now():
                 return False, f"Skipped: {message}"
             fingerprint = _fingerprint()
             if fingerprint is not None and fingerprint == _state["last_fp"]:
+                _state["dirty"] = False
                 return True, "Nothing new to back up -- the cloud copy is already up to date."
             note = _changed_tables(_state["last_fp"], fingerprint)
             new_sha = _remote_upload(cfg, data, _remote_sha(cfg), note)
             _write_sidecar(new_sha)
             _state["last_fp"] = fingerprint
+            _state["dirty"] = False
+            _state["last_upload_ts"] = time.time()
             _state["last_backup"] = datetime.now(timezone.utc)
             _state["last_error"] = None
             return True, "Backup uploaded."
         except Exception as exc:
             _state["last_error"] = f"Backup failed: {exc}"
             return False, _state["last_error"]
+
+
+def _flush_on_exit() -> None:
+    """Best effort when the app stops normally: upload changes still waiting for their slot."""
+    try:
+        if _state["dirty"] and not _state["blocked"] and is_enabled():
+            _state["exiting"] = True
+            backup_now()
+    except Exception:
+        pass
+
+
+atexit.register(_flush_on_exit)

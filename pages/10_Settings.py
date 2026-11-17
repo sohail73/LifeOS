@@ -181,6 +181,14 @@ if is_owner(user_id, current_user_email()):
             )
         else:
             st.info("Automatic cloud backup is ON. It runs about 30 seconds after your next change.")
+        if cloud["pending"] and not cloud["blocked"]:
+            import time as _time
+
+            when = _time.strftime("%H:%M", _time.localtime(cloud["next_backup_ts"])) if cloud["next_backup_ts"] else "soon"
+            st.info(
+                f"Some changes are waiting for the next automatic backup (around {when}; backups are at least "
+                f"{cloud['interval_minutes']} minutes apart). Press the button below before pushing new code or rebooting the app."
+            )
         if st.button("Back up to cloud now", use_container_width=True):
             done, done_msg = cloud_backup.backup_now()
             (st.success if done else st.error)(done_msg)
