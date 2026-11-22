@@ -225,3 +225,87 @@ def combined_daily_activity(study_df: pd.DataFrame, coding_df: pd.DataFrame, day
     # each problem counts like roughly 20 minutes of focused work.
     result["score"] = result["hours"] * 60 + result["problems"] * 20
     return result
+
+
+def goal_streak(df: pd.DataFrame, goal_minutes: float, excused_dates=None, today: date | None = None) -> dict:
+    """
+    The "daily goal streak": how many days in a row you studied at least
+    your daily study goal (Settings > Daily study goal).
+
+    - A day counts only if that day's total study time is >= the goal.
+    - Leave days never break the streak and never add to it (same idea
+      as a streak freeze), so a streak can continue straight across them.
+    - Today is not over yet: while today's goal isn't met the streak is
+      counted up to yesterday (shown as "waiting"), and it only drops to 0
+      once a whole day passes without reaching the goal (or leave).
+    - Every past day is judged against the CURRENT goal.
+
+    Stars: every day that meets the goal earns 1 star, and studying a
+    multiple of the goal earns more (double the goal = 2 stars, capped at
+    3 a day). "total_stars" adds up the stars of the current run only, so a
+    missed day (that isn't leave) resets it to 0 along with the streak.
+
+    Returns {"current", "longest", "today_met", "today_minutes",
+             "goal_minutes", "on_leave", "total_stars", "stars_today"}.
+    """
+    if today is None:
+        today = date.today()
+    if excused_dates is None:
+        from utils.helper import load_leave_dates
+
+        excused_dates = load_leave_dates()
+    excused = {pd.Timestamp(d).date() for d in excused_dates}
+
+    goal = max(float(goal_minutes or 0), 1.0)  # a goal of 0 must not make every day "met"
+
+    def stars_for(minutes: float) -> int:
+        """1 star for reaching the goal, +1 for each further full multiple of it (max 3 a day)."""
+        return max(1, min(3, int((minutes + 1e-6) // goal)))
+
+    if df is None or df.empty:
+        per_day = {}
+    else:
+        totals = df.groupby(df["date"].dt.date)["duration_minutes"].sum()
+        per_day = {day: float(minutes) for day, minutes in totals.items()}
+
+    met_days = {day for day, minutes in per_day.items() if minutes >= goal - 1e-6}
+    today_minutes = per_day.get(today, 0.0)
+    today_met = today in met_days
+
+    # Longest run anywhere in the data (leave days in between don't break it).
+    longest = 0
+    running = 0
+    previous = None
+    for day in sorted(met_days):
+        if previous is not None and all(
+            (previous + timedelta(days=i)) in excused for i in range(1, (day - previous).days)
+        ):
+            running += 1
+        else:
+            running = 1
+        longest = max(longest, running)
+        previous = day
+
+    # Current run, counted back from today (if today is met or on leave) or from yesterday.
+    cursor = today if (today_met or today in excused) else today - timedelta(days=1)
+    current = 0
+    total_stars = 0
+    earliest = min(met_days) if met_days else today
+    while cursor >= earliest:
+        if cursor in met_days:
+            current += 1
+            total_stars += stars_for(per_day[cursor])
+        elif cursor not in excused:
+            break
+        cursor -= timedelta(days=1)
+
+    return {
+        "current": current,
+        "longest": max(longest, current),
+        "today_met": today_met,
+        "today_minutes": today_minutes,
+        "goal_minutes": goal,
+        "on_leave": today in excused,
+        "total_stars": total_stars,
+        "stars_today": stars_for(today_minutes) if today_met else 0,
+    }

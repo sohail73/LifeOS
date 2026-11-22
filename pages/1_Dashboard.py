@@ -25,6 +25,7 @@ from database.queries import (
     get_coding_logs_df,
     get_custom_quote,
     get_goals,
+    get_leave_dates,
     get_leave_days,
     get_long_term_goals,
     get_pinned_job_target,
@@ -35,6 +36,7 @@ from database.queries import (
     get_tasks_for_date,
 )
 from utils.helper import format_duration, get_daily_quote
+from utils.streak_badge import badge_html as streak_badge_html
 from utils.ui import page_header, countdown_banner_html, kpi_card_row, progress_bar_html, render_sidebar_branding
 from widgets.charts import activity_heatmap
 from widgets.goal_widgets import render_goal_card
@@ -45,8 +47,11 @@ require_login()
 
 user_id = current_user_id()
 render_sidebar_branding(current_user_name(), get_avatar_base64(user_id))
-page_header("Dashboard", eyebrow="Overview")
-st.caption(f"Here's where things stand today, {current_user_name()}.")
+header_left, header_right = st.columns([3, 2])
+with header_left:
+    page_header("Dashboard", eyebrow="Overview")
+    st.caption(f"Here's where things stand today, {current_user_name()}.")
+streak_badge_slot = header_right.empty()  # filled below, once study data and the daily goal are loaded
 
 today = date.today()
 
@@ -134,6 +139,12 @@ coding_df = get_coding_logs_df(user_id)
 goals = get_goals(user_id)
 long_term_goals = get_long_term_goals(user_id)
 projects = get_projects(user_id)
+
+# Top-right badge: daily study-goal streak (faded until today's goal is reached)
+goal_streak_info = sa.goal_streak(
+    study_df, goals["daily_study_minutes_goal"], excused_dates=get_leave_dates(user_id), today=today
+)
+streak_badge_slot.markdown(streak_badge_html(goal_streak_info), unsafe_allow_html=True)
 
 if study_df.empty and coding_df.empty:
     st.info(
