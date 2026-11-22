@@ -6,8 +6,9 @@ The Dashboard's top-right "daily study goal" badge.
 How it works
 - Every day you reach your daily study goal (Settings) earns 1 star;
   studying double the goal earns 2 stars (max 3 a day).
-- Each badge level has 3 stars. When all 3 are filled the badge UPGRADES to
-  the next, fancier level (see LEVELS): plain round badge -> shield -> laurel ->
+- A badge level needs a number of stars that grows with the level (3, then 4,
+  then 5, then 6 - see STARS_NEEDED). When they are all filled the badge UPGRADES
+  to the next, fancier level (see LEVELS): plain round badge -> shield -> laurel ->
   wings -> crown -> sparkles -> aura. There are 15 levels.
 - Missing a day (that isn't marked leave) resets everything back to level 0.
 - The badge is faded until today's goal is reached, then it lights up.
@@ -24,7 +25,9 @@ import math
 
 from utils.helper import format_duration
 
-STARS_PER_LEVEL = 3
+# Stars needed to finish each level (the last level, Mythic, is the top and needs none).
+STARS_NEEDED = [3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6]
+MAX_STARS_SHOWN = 6  # stars drawn on the top level (all filled)
 
 # Colours: face (top, bottom), rim (light, dark), ink (text on the face), ribbon (light, dark), wing (light, dark).
 # Features switch on as the level grows.
@@ -59,23 +62,41 @@ _ORNATE = (
 
 
 # --------------------------------------------------------------------------- level maths
+def _cumulative():
+    totals = [0]
+    for needed in STARS_NEEDED:
+        totals.append(totals[-1] + needed)
+    return totals  # totals[level] = stars you need in total to reach that level
+
+
+CUMULATIVE = _cumulative()
+STARS_FOR_MAX = CUMULATIVE[-1]
+
+
+def stars_needed(level: int) -> int:
+    return STARS_NEEDED[level] if level < len(STARS_NEEDED) else MAX_STARS_SHOWN
+
+
 def level_progress(total_stars: int, stars_today: int = 0) -> dict:
     """Where the badge stands for a given number of stars (and whether today's stars levelled it up)."""
 
     def split(stars: int):
-        if stars >= STARS_PER_LEVEL * MAX_LEVEL:
-            return MAX_LEVEL, STARS_PER_LEVEL
-        return stars // STARS_PER_LEVEL, stars % STARS_PER_LEVEL
+        if stars >= STARS_FOR_MAX:
+            return MAX_LEVEL, MAX_STARS_SHOWN
+        level = max(i for i in range(len(STARS_NEEDED)) if CUMULATIVE[i] <= stars)
+        return level, stars - CUMULATIVE[level]
 
     total_stars = max(int(total_stars), 0)
     stars_today = max(min(int(stars_today), total_stars), 0)
     level, in_level = split(total_stars)
     level_before, _ = split(total_stars - stars_today)
-    is_max = level == MAX_LEVEL and in_level == STARS_PER_LEVEL
+    is_max = total_stars >= STARS_FOR_MAX
+    needed = stars_needed(level)
     return {
         "level": level,
         "stars_in_level": in_level,
-        "stars_to_next": 0 if is_max else STARS_PER_LEVEL - in_level,
+        "stars_needed": needed,
+        "stars_to_next": 0 if is_max else needed - in_level,
         "is_max": is_max,
         "leveled_up_today": stars_today > 0 and level > level_before,
         "new_stars_today": min(in_level, stars_today),
@@ -165,7 +186,7 @@ def _book(ink):
     )
 
 
-def build_svg(level: int, stars_in_level: int, new_stars: int, label: str, unit: str, animate: bool, title: str) -> str:
+def build_svg(level: int, stars_in_level: int, star_count: int, new_stars: int, label: str, unit: str, animate: bool, title: str) -> str:
     cfg = LEVELS[level]
     face1, face2 = cfg["face"]
     rim1, rim2 = cfg["rim"]
@@ -302,10 +323,16 @@ def build_svg(level: int, stars_in_level: int, new_stars: int, label: str, unit:
         x, y, s = spots[i]
         parts.append(_sparkle(x, y, s, round(i * 0.45, 2)))
 
-    # the 3 stars
-    star_spots = [(CX - 46, 226, 15), (CX, 220, 19), (CX + 46, 226, 15)]
+    # the star row (3 to 6 stars, depending on the level)
+    spacing = {3: 46, 4: 42, 5: 38, 6: 36}.get(star_count, 36)
+    base_r = {3: 15, 4: 15, 5: 14, 6: 13}.get(star_count, 13)
+    mid = (star_count - 1) / 2
     first_new = stars_in_level - new_stars
-    for i, (x, y, r) in enumerate(star_spots):
+    for i in range(star_count):
+        offset = (i - mid) / mid if mid else 0
+        x = CX + (i - mid) * spacing
+        y = 220 + 6 * offset * offset
+        r = base_r + (4 if (star_count % 2 == 1 and i == int(mid)) else 0)
         if i < stars_in_level:
             extra = 'filter="url(#glow)"' if animate else ""
             klass = ' class="pop"' if (animate and i >= first_new) else ""
@@ -330,6 +357,12 @@ _CSS = (
     ".lo-bd-status{font-size:12.5px;color:#4A4775;margin-top:6px;line-height:1.35;}"
     ".lo-bd-status.up{color:#B45309;font-weight:800;}"
     ".lo-bd-meta{font-size:11px;color:#7C7A9E;margin-top:5px;line-height:1.35;}"
+    ".lo-bd-streak{display:inline-flex;align-items:center;margin-top:9px;padding:4px 13px 4px 9px;border-radius:999px;"
+    "background:#F1F0FB;color:#6B6890;font-size:12px;font-weight:700;}"
+    ".lo-bd-streak b{font-size:19px;font-weight:800;color:#4A4775;line-height:1;margin:0 5px 0 6px;}"
+    ".lo-bd-streak.on{background:linear-gradient(135deg,#FFEDD5,#FED7AA);color:#9A3412;box-shadow:0 2px 8px rgba(249,115,22,.22);}"
+    ".lo-bd-streak.on b{color:#C2410C;}"
+    ".lo-bd-streak svg{display:block;}"
     "</style>"
 )
 
@@ -348,8 +381,8 @@ def badge_html(info: dict) -> str:
     lit = bool(info["today_met"])
     label, unit = _goal_label(info["goal_minutes"])
 
-    title = f"Daily {label} {unit.lower()} study goal. Level {level + 1}: {cfg['name']}, {progress['stars_in_level']} of 3 stars."
-    svg = build_svg(level, progress["stars_in_level"], progress["new_stars_today"] if lit else 0, label, unit, lit, title)
+    title = f"Daily {label} {unit.lower()} study goal. Level {level + 1}: {cfg['name']}, {progress['stars_in_level']} of {progress['stars_needed']} stars."
+    svg = build_svg(level, progress["stars_in_level"], progress["stars_needed"], progress["new_stars_today"] if lit else 0, label, unit, lit, title)
     data = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     img_style = "width:158px;height:auto;display:block;" + ("" if lit else "filter:grayscale(1);opacity:.55;")
 
@@ -376,7 +409,19 @@ def badge_html(info: dict) -> str:
         left = progress["stars_to_next"]
         next_line = f"{left} star{'s' if left != 1 else ''} to {LEVELS[level + 1]['name']}"
 
-    meta = f"{next_line} &middot; {int(info['current'])}-day streak &middot; best {int(info['longest'])}"
+    meta = f"{progress['stars_in_level']}/{progress['stars_needed']} stars &middot; {next_line} &middot; best streak {int(info['longest'])} days"
+    days = int(info["current"])
+    flame = (
+        '<svg width="14" height="18" viewBox="0 0 16 20"><path d="M8 0C9 4 14 6 14 12.5A6 6 0 0 1 2 12.5C2 9.5 3.6 8 4.8 6.6'
+        'C5.2 8.4 6.2 9 7 8.6C6.6 5.6 6.6 3 8 0Z" fill="' + ("#F97316" if lit else "#9CA3AF") + '"/>'
+        '<path d="M8 20A3.4 3.4 0 0 1 4.6 16.6C4.6 14.6 6.5 13.6 8 11.4C9.5 13.6 11.4 14.6 11.4 16.6A3.4 3.4 0 0 1 8 20Z" '
+        'fill="' + ("#FDE68A" if lit else "#E5E7EB") + '"/></svg>'
+    )
+    streak_note = "" if (lit or days == 0 or info["on_leave"]) else " &middot; keep it going today"
+    streak = (
+        f'<div class="lo-bd-streak{" on" if lit else ""}" title="Days in a row you reached your daily goal">'
+        f"{flame}<b>{days}</b> day streak{streak_note}</div>"
+    )
 
     return (
         _CSS
@@ -384,6 +429,7 @@ def badge_html(info: dict) -> str:
         + '<div class="lo-bd-text">'
         + f'<div class="lo-bd-name">{cfg["name"]}</div>'
         + f'<div class="lo-bd-lv">Level {level + 1} of {MAX_LEVEL + 1}</div>'
+        + streak
         + f'<div class="{status_class}">{status}</div>'
         + f'<div class="lo-bd-meta">{meta}</div>'
         + "</div>"
