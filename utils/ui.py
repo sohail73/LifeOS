@@ -343,8 +343,10 @@ def render_sidebar_branding(user_name: str = "", avatar_base64: str | None = Non
 
 def avatar_img_tag(avatar_base64: str, size: int = 40) -> str:
     """A circular <img> tag from a stored base64 image, for inline use in st.markdown."""
+    from utils.avatar import mime_for
+
     return (
-        f'<img src="data:image/png;base64,{avatar_base64}" '
+        f'<img src="data:{mime_for(avatar_base64)};base64,{avatar_base64}" '
         f'style="width:{size}px;height:{size}px;border-radius:50%;object-fit:cover;" />'
     )
 

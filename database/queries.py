@@ -855,7 +855,17 @@ def get_avatar_base64(user_id: int) -> Optional[str]:
     conn = get_connection()
     try:
         row = conn.execute("SELECT avatar_base64 FROM users WHERE id = ?", (user_id,)).fetchone()
-        return row["avatar_base64"] if row else None
+        avatar = row["avatar_base64"] if row else None
+        if avatar:
+            # An old, full-size photo is sent to the browser on every page load: shrink it once and keep the small copy.
+            from utils.avatar import shrink_avatar_b64
+
+            small = shrink_avatar_b64(avatar)
+            if small != avatar:
+                conn.execute("UPDATE users SET avatar_base64 = ? WHERE id = ?", (small, user_id))
+                conn.commit()
+                avatar = small
+        return avatar
     finally:
         conn.close()
 

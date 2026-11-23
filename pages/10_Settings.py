@@ -19,6 +19,7 @@ from database.queries import get_avatar_base64
 from database import cloud_backup
 from database.backup_tools import is_owner, make_backup_bytes, restore_from_bytes, validate_backup
 from database.create_tables import initialize_database
+from utils.avatar import shrink_avatar_bytes
 from utils.ui import page_header, avatar_img_tag, duration_input, render_sidebar_branding
 
 st.set_page_config(page_title="Settings - LifeOS", page_icon="⚙️", layout="centered")
@@ -40,7 +41,7 @@ avatar_col1, avatar_col2 = st.columns(2)
 
 if uploaded_avatar is not None:
     if avatar_col1.button("Save Picture", use_container_width=True):
-        encoded = base64.b64encode(uploaded_avatar.read()).decode("utf-8")
+        encoded = shrink_avatar_bytes(uploaded_avatar.read())  # small square: keeps every page (and the backup) light
         set_avatar_base64(user_id, encoded)
         st.success("Profile picture updated.")
         st.rerun()

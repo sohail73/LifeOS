@@ -11,6 +11,8 @@ Goals & Tasks page via widgets/goal_widgets.py).
 
 from datetime import date, timedelta
 
+import time
+
 import streamlit as st
 
 from analytics import coding_analytics as ca
@@ -42,6 +44,7 @@ from widgets.charts import activity_heatmap
 from widgets.goal_widgets import render_goal_card
 from widgets.task_widgets import render_task_checklist
 
+_page_started = time.perf_counter()  # for the small "built in X s" note at the very bottom
 st.set_page_config(page_title="Dashboard - LifeOS", page_icon="⚡", layout="wide")
 require_login()
 
@@ -388,3 +391,5 @@ with st.container(border=True):
             st.write(f"{day_tasks_done}/{day_tasks_total} task(s) done")
         for event in goal_events:
             st.write(event)
+
+st.caption(f"Page built on the server in {time.perf_counter() - _page_started:.2f}s")

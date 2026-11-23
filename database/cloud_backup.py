@@ -52,7 +52,8 @@ EXIT_TIMEOUT = 8                  # seconds per request when flushing at shutdow
 RETRY_SECONDS = 30
 SIDECAR = DB_PATH.parent / ".cloud_backup_sha"  # remote file version this server last synced to
 
-_lock = threading.RLock()
+_lock = threading.RLock()     # protects the shared state only; held for microseconds, NEVER during network calls
+_io_lock = threading.RLock()  # serialises the slow work (download/restore/upload); the app never waits on it
 _cfg_cache = None
 _state = {
     "checked": False,      # startup check/restore finished OK
@@ -268,7 +269,10 @@ def restore_if_needed() -> None:
 
     from database.backup_tools import restore_from_bytes
 
-    with _lock:
+    if _state["checked"] or time.time() < _state["next_retry"]:
+        return  # fast path: runs on every page load, must never wait for an upload
+
+    with _io_lock:
         if _state["checked"] or time.time() < _state["next_retry"]:
             return
         try:
@@ -348,7 +352,7 @@ def backup_now():
 
     from database.backup_tools import make_backup_bytes, validate_backup
 
-    with _lock:
+    with _io_lock:
         try:
             data = make_backup_bytes()
             ok, message = validate_backup(data)
